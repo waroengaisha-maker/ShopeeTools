@@ -11,19 +11,24 @@ def process_reconciliation(order_file, income_file):
     df_order = df_order[df_order['Status Pesanan'] != 'Batal']
     df_order = df_order[df_order['No. Resi'].notna()]
     
+    # Filter: Total Penghasilan != 0
+    df_income = df_income[df_income['Total Penghasilan'] != 0]
+    
+    # Filter: Lihat berdasarkan == 'Sku'
+    df_income = df_income[df_income['Lihat berdasarkan'] == 'Sku']
+    
     # Perhitungan Jumlah baru: Jumlah - Returned quantity
     df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0)
     df_order['Jumlah'] = df_order['Jumlah'] - df_order['Returned quantity']
     
-    # Penggabungan Nama Produk dan Nama Variasi
-    df_order['Nama Variasi'] = df_order['Nama Variasi'].fillna('')
-    df_order['Nama Produk'] = df_order.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
+    # Simpan Nama Produk asli (tanpa variasi) untuk join
+    df_order['Nama Produk Asli'] = df_order['Nama Produk']
+    df_income['Nama Produk Asli'] = df_income['Nama Produk']
 
-    # 3. Generasi item_index
+    # 3. Generasi item_index berdasarkan Nama Produk ASLI (tanpa variasi)
     def add_item_index(df):
-        # Gunakan 'Nama Produk' yang sudah dimodifikasi
-        df = df.sort_values(by=['No. Pesanan', 'Nama Produk'])
-        df['item_index'] = df.groupby(['No. Pesanan', 'Nama Produk']).cumcount()
+        df = df.sort_values(by=['No. Pesanan', 'Nama Produk Asli'])
+        df['item_index'] = df.groupby(['No. Pesanan', 'Nama Produk Asli']).cumcount()
         return df
 
     df_order = add_item_index(df_order)
@@ -31,15 +36,33 @@ def process_reconciliation(order_file, income_file):
 
     # 4. Penggabungan (Merge)
     # Konversi kunci ke string untuk konsistensi
-    keys = ['No. Pesanan', 'Nama Produk', 'item_index']
+    keys = ['No. Pesanan', 'Nama Produk Asli', 'item_index']
     for key in keys:
         df_order[key] = df_order[key].astype(str)
         df_income[key] = df_income[key].astype(str)
 
-    df_merged = pd.merge(df_order, df_income, on=keys, how='left')
-
-    # 5. Agregasi
-    # ... (perhitungan Total Fees tetap sama)
+    # Perbaikan: Hitung kolom biaya baru di df_income SEBELUM merger
+    
+    # 1. Biaya Platform
+    df_income['Biaya Platform'] = df_income[['Biaya Administrasi', 'Biaya Proses Pesanan']].fillna(0).sum(axis=1)
+    
+    # 2. Biaya Gratis Ongkir XTRA (Opsional)
+    xtra_cols = [
+        'Biaya Gratis Ongkir XTRA - Ukuran Khusus (Kategori E)',
+        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori D)',
+        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori E)',
+        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori G)'
+    ]
+    df_income['Biaya Gratis Ongkir XTRA (Opsional)'] = df_income[xtra_cols].fillna(0).sum(axis=1)
+    
+    # 3. Biaya Layanan (Opsional)
+    layanan_cols = ['Biaya Transaksi', 'Biaya Layanan Promo XTRA']
+    df_income['Biaya Layanan (Opsional)'] = df_income[layanan_cols].fillna(0).sum(axis=1)
+    
+    # 4. Pajak
+    df_income['Pajak'] = df_income['PPh 22'].fillna(0)
+    
+    # Hitung Total Fees (tetap butuh ini untuk perhitungan total)
     fee_columns = [
         'Biaya Administrasi', 
         'Biaya Proses Pesanan', 
@@ -54,36 +77,56 @@ def process_reconciliation(order_file, income_file):
         'PPh 22'
     ]
     
-    for col in fee_columns:
-        if col in df_income.columns:
-            df_income[col] = df_income[col].fillna(0)
+    df_income['Total Fees'] = df_income[fee_columns].fillna(0).sum(axis=1)
     
-    df_income['Total Fees'] = df_income[fee_columns].sum(axis=1)
+    # Re-merge setelah hitung Total Fees
+    cols_to_merge = keys + ['Total Fees', 'Biaya Platform', 'Biaya Gratis Ongkir XTRA (Opsional)', 'Biaya Layanan (Opsional)', 'Pajak']
+    df_merged = pd.merge(df_order, df_income[cols_to_merge], on=keys, how='left')
     
-    # Re-merge setelah hitung Total Fees (disederhanakan untuk efisiensi)
-    # Gunakan df_merged yang sudah ada dan tambahkan Total Fees dari df_income
-    df_merged = pd.merge(df_order, df_income[keys + ['Total Fees']], on=keys, how='left')
-    df_merged['Total Fees'] = df_merged['Total Fees'].fillna(0)
+    # Isi NaN dengan 0
+    for col in ['Total Fees', 'Biaya Platform', 'Biaya Gratis Ongkir XTRA (Opsional)', 'Biaya Layanan (Opsional)', 'Pajak']:
+        df_merged[col] = df_merged[col].fillna(0)
+
+    # Penggabungan Nama Produk dan Nama Variasi untuk laporan final (setelah join sukses)
+    df_merged['Nama Variasi'] = df_merged['Nama Variasi'].fillna('')
+    df_merged['Nama Produk Tampilan'] = df_merged.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
 
     # Agregasi akhir
     df_merged['Harga Setelah Diskon (Ribuan)'] = df_merged['Harga Setelah Diskon'] * 1000
     
-    # Agregasi per Nama Produk DAN No. Pesanan
-    result = df_merged.groupby(['Nama Produk', 'No. Pesanan']).agg({
+    # Agregasi per Nama Produk Tampilan DAN No. Pesanan
+    agg_dict = {
         'Jumlah': 'sum',
         'Harga Setelah Diskon (Ribuan)': 'mean',
-        'Total Fees': 'sum'
-    }).reset_index()
+        'Total Fees': 'sum',
+        'Biaya Platform': 'sum',
+        'Biaya Gratis Ongkir XTRA (Opsional)': 'sum',
+        'Biaya Layanan (Opsional)': 'sum',
+        'Pajak': 'sum'
+    }
     
+    result = df_merged.groupby(['Nama Produk Tampilan', 'No. Pesanan']).agg(agg_dict).reset_index()
+    result.rename(columns={'Nama Produk Tampilan': 'Nama Produk'}, inplace=True)
+    
+    # Format angka
+    for col in ['Gross Price (@)', 'Total Fees', 'Biaya Platform', 'Biaya Gratis Ongkir XTRA (Opsional)', 'Biaya Layanan (Opsional)', 'Pajak']:
+        if col != 'Gross Price (@)':
+            result[col] = result[col].apply(lambda x: f"{int(round(x))}")
+            
     result['Gross Price (@)'] = result['Harga Setelah Diskon (Ribuan)'].apply(lambda x: f"{int(round(x))}")
-    result['Total Fees'] = result['Total Fees'].apply(lambda x: f"{int(round(x))}")
     
     result.drop(columns=['Harga Setelah Diskon (Ribuan)'], inplace=True, errors='ignore')
     
-    # Atur posisi kolom: No., No. Pesanan, Nama Produk, Jumlah, Gross Price (@), Total Fees
-    result = result[['No. Pesanan', 'Nama Produk', 'Jumlah', 'Gross Price (@)', 'Total Fees']]
+    # Perbaikan: Konversi Gross Price (@) ke numerik sementara untuk sorting yang benar
+    result['Gross Price (@) Numeric'] = result['Gross Price (@)'].astype(int)
     
-    # Tambahkan kolom No. sebagai urutan
+    # Urutkan berdasarkan Nama Produk dan Gross Price (@) Ascending
+    result = result.sort_values(by=['Nama Produk', 'Gross Price (@) Numeric'], ascending=[True, True])
+    
+    # Atur posisi kolom dan hapus kolom sorting sementara
+    result = result[['No. Pesanan', 'Nama Produk', 'Jumlah', 'Gross Price (@)', 'Biaya Platform', 'Biaya Gratis Ongkir XTRA (Opsional)', 'Biaya Layanan (Opsional)', 'Pajak', 'Total Fees']]
+    
+    # Tambahkan kolom No. sebagai urutan setelah disortir
     result.insert(0, 'No.', range(1, len(result) + 1))
     
     return result

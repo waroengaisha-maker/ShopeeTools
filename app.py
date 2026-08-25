@@ -36,12 +36,17 @@ if uploaded_order and uploaded_income:
             
             # Terapkan filter: jika kosong, tampilkan semua data
             if selected_values:
-                filtered_result = result[result[filter_col].isin(selected_values)]
+                filtered_result = result[result[filter_col].isin(selected_values)].copy()
             else:
-                filtered_result = result
+                filtered_result = result.copy()
         else:
-            filtered_result = result
-        
+            filtered_result = result.copy()
+
+        # Reset kolom No. agar berurutan kembali setelah filter
+        if 'No.' in filtered_result.columns:
+            filtered_result = filtered_result.drop(columns=['No.'])
+        filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
+
         st.dataframe(filtered_result, use_container_width=True)
         
         # Export to Excel (gunakan data yang sudah difilter)
