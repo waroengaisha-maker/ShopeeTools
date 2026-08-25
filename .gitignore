@@ -1,0 +1,16 @@
+# Environment and Python
+venv/
+.env
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+
+# Data Files (Crucial: do not commit actual data!)
+files/*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
