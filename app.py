@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from data_processor import process_reconciliation
+from data_processor import process_reconciliation, add_total_row, format_thousands
 import io
 
 st.set_page_config(layout="wide")
@@ -47,16 +47,63 @@ if uploaded_order and uploaded_income:
             filtered_result = filtered_result.drop(columns=['No.'])
         filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
 
-        st.dataframe(filtered_result, use_container_width=True)
+        # Hitung Ringkasan Finansial untuk Metrik UI
+        total_subtotal = int(filtered_result['Subtotal'].sum())
+        total_biaya = int(filtered_result['Total Biaya'].sum())
+        total_penghasilan = total_subtotal + total_biaya  # Total Biaya bernilai negatif, jadi ditambah
+
+        # Tampilkan Ringkasan Finansial dalam bentuk Kartu Metrik Premium
+        st.subheader("Ringkasan Rekonsiliasi")
+        m_col1, m_col2, m_col3 = st.columns(3)
+        m_col1.metric(
+            label="Total Subtotal (Gross)", 
+            value=f"Rp {total_subtotal:,.0f}".replace(",", ".")
+        )
+        m_col2.metric(
+            label="Total Biaya (Fees)", 
+            value=f"Rp {total_biaya:,.0f}".replace(",", "."),
+            delta=f"Potongan Biaya" if total_biaya == 0 else f"{total_biaya/total_subtotal*100:.1f}% dari Subtotal",
+            delta_color="inverse"
+        )
+        m_col3.metric(
+            label="Total Penghasilan Bersih", 
+            value=f"Rp {total_penghasilan:,.0f}".replace(",", ".")
+        )
+
+        st.subheader("Detail Data Produk")
+
+        # Format tampilan angka di tabel Streamlit dengan pemisah ribuan koma
+        display_df = filtered_result.copy()
+        numeric_cols = [
+            'Harga (@)',
+            'Jumlah',
+            'Subtotal',
+            'Biaya Administrasi',
+            'Biaya Gratis Ongkir XTRA',
+            'Biaya Promo XTRA',
+            'Subtotal Biaya',
+            'Biaya Proses Pesanan',
+            'Total Biaya',
+            'Pajak'
+        ]
+        for col in numeric_cols:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].apply(format_thousands)
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
         
-        # Export to Excel (gunakan data yang sudah difilter)
+        # Tambahkan baris total khusus untuk ekspor Excel saja
+        final_result_excel = add_total_row(filtered_result)
+
+        # Export to Excel (menggunakan data yang sudah difilter dan memiliki baris total di paling bawah)
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            filtered_result.to_excel(writer, index=False)
+            final_result_excel.to_excel(writer, index=False)
         
         st.download_button(
-            label="Unduh Hasil (Excel)",
+            label="Unduh Laporan Excel Lengkap (.xlsx)",
             data=buffer,
             file_name="hasil_rekonsiliasi.xlsx",
             mime="application/vnd.ms-excel"
         )
+
