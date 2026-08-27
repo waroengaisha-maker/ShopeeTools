@@ -178,7 +178,7 @@ if uploaded_order and uploaded_income:
         # 2. Pilihan Kolom Pengurutan
         with f_col2:
             sortable_cols = [
-                'Nama Produk', 'Harga (@)', 'Jumlah', 'Subtotal', 
+                'Nama Produk', 'Harga (@)', 'Jumlah', 'Returned quantity', 'Subtotal', 
                 'Biaya Administrasi', COL_PCT_ADM, 
                 'Biaya Gratis Ongkir XTRA', COL_PCT_XTRA, 
                 'Biaya Promo XTRA', COL_PCT_PROMO, 
@@ -309,6 +309,8 @@ if uploaded_order and uploaded_income:
 
         # ─── Tabel Detail Produk ───
         st.subheader("📋 Detail Data Produk")
+        if 'Returned quantity' in filtered_result.columns and (filtered_result['Returned quantity'] > 0).any():
+            st.caption("🟡 Baris berwarna kuning/oranye menandakan produk dengan **Returned quantity > 0** (terkait penyesuaian/retur).")
 
         display_df = filtered_result.copy()
 
@@ -318,11 +320,12 @@ if uploaded_order and uploaded_income:
             COL_PCT_XTRA: st.column_config.NumberColumn("(%) ", format="%.2f%%"),
             COL_PCT_PROMO: st.column_config.NumberColumn("(%)  ", format="%.2f%%"),
             COL_PCT_SUB_BIAYA: st.column_config.NumberColumn("(%)   ", format="%.2f%%"),
+            'Returned quantity': st.column_config.NumberColumn("Retur (Qty)", format="%d", help="Jumlah unit yang diretur pembeli"),
         }
         
         # Format ribuan (koma) untuk kolom uang — tampil saja, data tetap int
         thousand_cols = [
-            'Harga (@)', 'Jumlah', 'Subtotal', 'Biaya Administrasi', 
+            'Harga (@)', 'Jumlah', 'Returned quantity', 'Subtotal', 'Biaya Administrasi', 
             'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Subtotal Biaya', 
             'Biaya Proses Pesanan', 'Total Biaya', 'Pajak'
         ]
@@ -330,8 +333,17 @@ if uploaded_order and uploaded_income:
             if col in display_df.columns:
                 cols_config[col] = st.column_config.NumberColumn(col, format="%,d")
 
+        # Fungsi highlight baris yang memiliki Returned quantity > 0
+        def highlight_returned(row):
+            ret_qty = row.get('Returned quantity', 0)
+            if pd.notna(ret_qty) and ret_qty > 0:
+                return ['background-color: rgba(234, 179, 8, 0.22); color: #fef08a; font-weight: 600;'] * len(row)
+            return [''] * len(row)
+
+        styled_df = display_df.style.apply(highlight_returned, axis=1)
+
         st.dataframe(
-            display_df, 
+            styled_df, 
             use_container_width=True, 
             hide_index=True,
             column_config=cols_config

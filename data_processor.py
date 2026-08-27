@@ -103,13 +103,14 @@ def add_total_row(df):
     numeric_cols = [
         'Harga (@)',
         'Jumlah',
+        'Returned quantity',
         'Subtotal',
         'Biaya Administrasi', 
         'Biaya Gratis Ongkir XTRA', 
         'Biaya Promo XTRA', 
         'Subtotal Biaya',
         'Biaya Proses Pesanan', 
-        'Total Biaya',
+        'Total Biaya', 
         'Pajak'
     ]
     
@@ -146,6 +147,7 @@ def add_total_row(df):
         'Nama Produk': 'Total Penghasilan',
         'Harga (@)': '',
         'Jumlah': '',
+        'Returned quantity': '',
         'Subtotal': total_penghasilan,
         'Biaya Administrasi': '',
         COL_PCT_ADM: '',
@@ -283,6 +285,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     agg_dict = {
         'Harga Setelah Diskon': 'mean',
         'Jumlah': 'sum',
+        'Returned quantity': 'sum',
         'Biaya Administrasi': 'sum',
         'Biaya Gratis Ongkir XTRA': 'sum',
         'Biaya Promo XTRA': 'sum',
@@ -307,13 +310,14 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     numeric_cols = [
         'Harga (@)',
         'Jumlah', 
+        'Returned quantity',
         'Subtotal',
         'Biaya Administrasi', 
         'Biaya Gratis Ongkir XTRA', 
         'Biaya Promo XTRA', 
         'Subtotal Biaya',
         'Biaya Proses Pesanan', 
-        'Total Biaya',
+        'Total Biaya', 
         'Pajak'
     ]
     for col in numeric_cols:
@@ -329,13 +333,14 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result[COL_PCT_SUB_BIAYA] = [abs(b) / sub * 100 if sub > 0 else 0.0 for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
     
     # Atur posisi kolom:
-    # No., No. Pesanan, Nama Produk, Harga (@), Jumlah, Subtotal,
+    # No., No. Pesanan, Nama Produk, Harga (@), Jumlah, Returned quantity, Subtotal,
     # Biaya Administrasi, (%), Biaya Gratis Ongkir XTRA, (%), Biaya Promo XTRA, (%), Subtotal Biaya, (%), Biaya Proses Pesanan, Total Biaya, Pajak
     result = result[[
         'No. Pesanan', 
         'Nama Produk', 
         'Harga (@)', 
         'Jumlah', 
+        'Returned quantity',
         'Subtotal', 
         'Biaya Administrasi', 
         COL_PCT_ADM,
