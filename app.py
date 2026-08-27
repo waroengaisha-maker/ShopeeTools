@@ -178,7 +178,7 @@ if uploaded_order and uploaded_income:
         # 2. Pilihan Kolom Pengurutan
         with f_col2:
             sortable_cols = [
-                'Nama Produk', 'Harga (@)', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal', 
+                'Nama Produk', 'Jumlah Bersih', 'Harga (@)', 'Jumlah', 'Returned quantity', 'Subtotal', 
                 'Biaya Administrasi', COL_PCT_ADM, 
                 'Biaya Gratis Ongkir XTRA', COL_PCT_XTRA, 
                 'Biaya Promo XTRA', COL_PCT_PROMO, 

@@ -347,10 +347,10 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result = result[[
         'No. Pesanan', 
         'Nama Produk', 
+        'Jumlah Bersih',
         'Harga (@)', 
         'Jumlah', 
         'Returned quantity',
-        'Jumlah Bersih',
         'Subtotal', 
         'Biaya Administrasi', 
         COL_PCT_ADM,
