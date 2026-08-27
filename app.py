@@ -6,6 +6,9 @@ from data_processor import (
     get_settlement_stats, generate_product_summary,
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
+from hpp_manager import (
+    load_hpp_master, load_mapping, save_mapping, auto_suggest_mapping
+)
 import io
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
@@ -65,6 +68,10 @@ html, body, [class*="css"] {
 .card-potential .pct { font-size: 0.78rem; color: #fde68a; margin-top: 0.2rem; }
 .card-grand .value { color: #2dd4bf; }
 .card-grand .pct { font-size: 0.78rem; color: #99f6e4; margin-top: 0.2rem; }
+.card-hpp .value { color: #f97316; }
+.card-hpp .pct { font-size: 0.78rem; color: #fdba74; margin-top: 0.2rem; }
+.card-laba .value { color: #10b981; }
+.card-laba .pct { font-size: 0.78rem; color: #6ee7b7; margin-top: 0.2rem; }
 .card-settle .value { color: #38bdf8; }
 .card-settle .pct { font-size: 0.78rem; margin-top: 0.2rem; }
 .unsettled-badge {
@@ -285,6 +292,34 @@ if uploaded_order and uploaded_income:
         # Total Keseluruhan (Settled Real + Estimasi Unsettled per Produk)
         total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
 
+        # ─── Perhitungan HPP & Laba Bersih Toko (Berdasarkan Mapping HPP Opsi B) ───
+        df_hpp_master = load_hpp_master()
+        all_unique_prods = result['Nama Produk'].dropna().unique().tolist()
+        mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
+        
+        # Buat dictionary lookup harga pokok per Nama Produk Shopee
+        hpp_by_code = {r['KodeItem']: r.to_dict() for _, r in df_hpp_master.iterrows()}
+        hpp_lookup = {}
+        for p_name, k_code in mapping_dict.items():
+            if k_code in hpp_by_code:
+                hpp_lookup[p_name] = hpp_by_code[k_code]
+
+        # Hitung Total HPP dari pesanan settled
+        def get_item_hpp(row):
+            p_name = row['Nama Produk']
+            qty = row['Jumlah Bersih']
+            unit_hpp = hpp_lookup.get(p_name, {}).get('HargaPokok', 0)
+            return qty * unit_hpp
+
+        if not settled_result.empty and hpp_lookup:
+            total_hpp_settled = int(round(settled_result.apply(get_item_hpp, axis=1).sum()))
+            laba_bersih_settled = total_penghasilan - total_hpp_settled
+            margin_laba_settled = (laba_bersih_settled / total_subtotal * 100) if total_subtotal > 0 else 0.0
+        else:
+            total_hpp_settled = 0
+            laba_bersih_settled = total_penghasilan
+            margin_laba_settled = 0.0
+
         # Hitung rata-rata penghasilan per hari berdasarkan rentang tanggal yang diproses
         proc_start = st.session_state.get('processed_start_date')
         proc_end = st.session_state.get('processed_end_date')
@@ -343,6 +378,25 @@ if uploaded_order and uploaded_income:
             '</div>'
         )
 
+        hpp_card = ""
+        laba_card = ""
+        if total_hpp_settled > 0:
+            hpp_card = (
+                '<div class="summary-card card-hpp">'
+                '<div class="label">Total Modal (HPP)</div>'
+                f'<div class="value">Rp {total_hpp_settled:,.0f}</div>'
+                f'<div class="pct">HPP Produk Terjual</div>'
+                '</div>'
+            )
+            laba_color = "#10b981" if laba_bersih_settled >= 0 else "#f87171"
+            laba_card = (
+                '<div class="summary-card card-laba">'
+                '<div class="label">Laba Bersih Real (Net Profit)</div>'
+                f'<div class="value" style="color: {laba_color};">Rp {laba_bersih_settled:,.0f}</div>'
+                f'<div class="pct">Margin Bersih: {margin_laba_settled:.1f}%</div>'
+                '</div>'
+            )
+
         potential_card = ""
         grand_total_card = ""
         if not unsettled_result.empty:
@@ -395,6 +449,8 @@ if uploaded_order and uploaded_income:
             + fees_card
             + adj_card
             + net_card
+            + hpp_card
+            + laba_card
             + potential_card
             + grand_total_card
             + daily_card
@@ -539,14 +595,18 @@ if uploaded_order and uploaded_income:
             )
 
         # ─── Tabel Rekapitulasi Produk (Grouping - Khusus Pesanan yang SUDAH Settlement) ───
-        df_product_summary = generate_product_summary(filtered_result)
+        df_product_summary = generate_product_summary(filtered_result, hpp_lookup=hpp_lookup)
         if not df_product_summary.empty:
-            with st.expander("📦 Rekapitulasi Penjualan Bersih per Produk (Sudah Settlement)", expanded=False):
-                st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dari pesanan yang **sudah settlement** dengan akumulasi Total Jumlah Bersih")
+            with st.expander("📦 Rekapitulasi Penjualan & Margin Laba per Produk (Sudah Settlement)", expanded=False):
+                st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dilengkapi kalkulasi Modal (HPP), Laba Bersih, dan Margin (%)")
                 prod_cols_config = {
                     'Total Jumlah Bersih': st.column_config.NumberColumn("Total Jumlah Bersih", format="%d"),
                     'Harga (@)': st.column_config.NumberColumn("Harga (@)", format="%,d"),
-                    'Total Penjualan Bersih': st.column_config.NumberColumn("Total Penjualan Bersih", format="%,d")
+                    'Total Penjualan Bersih': st.column_config.NumberColumn("Total Penjualan Bersih", format="%,d"),
+                    'HPP (@)': st.column_config.NumberColumn("HPP (@)", format="%,d"),
+                    'Total HPP': st.column_config.NumberColumn("Total HPP", format="%,d"),
+                    'Laba Bersih': st.column_config.NumberColumn("Laba Bersih", format="%,d"),
+                    'Margin Laba (%)': st.column_config.NumberColumn("Margin (%)", format="%.2f%%")
                 }
                 st.dataframe(
                     df_product_summary,
@@ -555,6 +615,39 @@ if uploaded_order and uploaded_income:
                     column_config=prod_cols_config
                 )
 
+        # ─── Panel Pengaturan Pemetaan HPP (Opsi B: Kamus Mapping) ───
+        with st.expander("🛠️ Pengaturan Pemetaan Master HPP Produk (Kamus Relasi)", expanded=False):
+            st.write("Sesuaikan relasi nama produk Shopee dengan Item di file Master HPP (`hpp_produk.xlsx`). Pilihan tersimpan otomatis.")
+            
+            hpp_options = ["(Belum Dipetakan)"] + [f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()]
+            code_to_option = {r['KodeItem']: f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()}
+            option_to_code = {f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})": r['KodeItem'] for _, r in df_hpp_master.iterrows()}
+            
+            m_col1, m_col2 = st.columns([3, 1])
+            with m_col1:
+                selected_shopee_prod = st.selectbox("Pilih Produk Shopee untuk Diatur:", sorted(all_unique_prods))
+            
+            current_code = mapping_dict.get(selected_shopee_prod, '')
+            current_idx = 0
+            if current_code in code_to_option:
+                current_idx = hpp_options.index(code_to_option[current_code])
+            
+            with m_col1:
+                selected_hpp_opt = st.selectbox("Petakan ke Master Item HPP:", hpp_options, index=current_idx)
+            
+            with m_col2:
+                st.write("")
+                st.write("")
+                if st.button("💾 Simpan Pemetaan", key="btn_save_mapping"):
+                    if selected_hpp_opt == "(Belum Dipetakan)":
+                        mapping_dict.pop(selected_shopee_prod, None)
+                    else:
+                        new_code = option_to_code[selected_hpp_opt]
+                        mapping_dict[selected_shopee_prod] = new_code
+                    save_mapping(mapping_dict)
+                    st.success("✅ Pemetaan tersimpan!")
+                    st.rerun()
+
         # ─── Export Excel (raw integer, tanpa formatting) ───
         final_result_excel = add_total_row(filtered_result)
 
@@ -562,7 +655,7 @@ if uploaded_order and uploaded_income:
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             final_result_excel.to_excel(writer, sheet_name='Hasil Rekonsiliasi', index=False)
             if not df_product_summary.empty:
-                df_product_summary.to_excel(writer, sheet_name='Rekap Produk', index=False)
+                df_product_summary.to_excel(writer, sheet_name='Rekap Produk & HPP', index=False)
             if not relevant_adj.empty:
                 relevant_adj.to_excel(writer, sheet_name='Penyesuaian (Adjustment)', index=False)
         
