@@ -274,17 +274,36 @@ if uploaded_order and uploaded_income:
         total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
         pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
 
-        # ─── Perhitungan Estimasi Potensi Penghasilan dari Unsettled Orders ───
+        # ─── Perhitungan Estimasi Potensi Penghasilan dari Unsettled Orders (Per-Produk) ───
         unsettled_result = filtered_result[filtered_result['Is_Settled'] == False].copy() if 'Is_Settled' in filtered_result.columns else pd.DataFrame()
         unsettled_subtotal = int(unsettled_result['Subtotal'].sum()) if not unsettled_result.empty else 0
         
-        # Rasio fee rata-rata dari pesanan yang sudah settled (fallback ke 15% jika belum ada settled)
-        effective_fee_ratio = (abs(total_biaya) / total_subtotal) if total_subtotal > 0 else 0.15
+        # Rasio fee global toko sebagai fallback
+        global_fee_ratio = (abs(total_biaya) / total_subtotal) if total_subtotal > 0 else 0.15
         
-        # Estimasi biaya dan estimasi bersih untuk unsettled orders
-        est_unsettled_net = int(unsettled_subtotal * (1 - effective_fee_ratio))
+        if not unsettled_result.empty and not settled_result.empty:
+            # 1. Pelajari persentase fee fixed per Nama Produk dari data yang sudah settled
+            # Rumus per produk: |Total Biaya Produk| / Subtotal Produk
+            prod_fee_stats = settled_result.groupby('Nama Produk').apply(
+                lambda g: (abs(g['Total Biaya'].sum()) / g['Subtotal'].sum()) if g['Subtotal'].sum() > 0 else global_fee_ratio,
+                include_groups=False
+            ).to_dict()
+
+            # 2. Hitung estimasi fee per baris pesanan unsettled sesuai Nama Produk masing-masing
+            def est_row_net(row):
+                p_name = row['Nama Produk']
+                sub = row['Subtotal']
+                fee_rate = prod_fee_stats.get(p_name, global_fee_ratio)
+                return sub * (1 - fee_rate)
+
+            unsettled_result['Est_Net'] = unsettled_result.apply(est_row_net, axis=1)
+            est_unsettled_net = int(round(unsettled_result['Est_Net'].sum()))
+            effective_fee_ratio = (1 - (est_unsettled_net / unsettled_subtotal)) if unsettled_subtotal > 0 else global_fee_ratio
+        else:
+            effective_fee_ratio = global_fee_ratio
+            est_unsettled_net = int(unsettled_subtotal * (1 - effective_fee_ratio))
         
-        # Total Keseluruhan (Settled Real + Estimasi Unsettled)
+        # Total Keseluruhan (Settled Real + Estimasi Unsettled per Produk)
         total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
 
         # Hitung rata-rata penghasilan per hari berdasarkan rentang tanggal yang diproses
