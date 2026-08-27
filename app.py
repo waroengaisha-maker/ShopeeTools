@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from data_processor import (
     process_reconciliation, add_total_row, format_thousands,
-    get_order_date_bounds, extract_adjustments,
+    get_order_date_bounds, get_order_filter_options, extract_adjustments,
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 import io
@@ -146,6 +146,11 @@ if uploaded_order and uploaded_income:
             # Ambil data penyesuaian (Adjustment) dari sheet Adjustment
             uploaded_income.seek(0)
             st.session_state.df_adjustments = extract_adjustments(uploaded_income)
+            # Ambil opsi filter langsung dari file order (sesuai date range & status valid)
+            uploaded_order.seek(0)
+            st.session_state.filter_options = get_order_filter_options(
+                uploaded_order, start_date=start_date, end_date=end_date
+            )
 
         # Reset date bounds cache saat proses ulang
         if 'date_bounds' in st.session_state:
@@ -161,15 +166,17 @@ if uploaded_order and uploaded_income:
         f_col1, f_col2, f_col3 = st.columns(3)
         
         # 1. Filter Data
+        filter_options = st.session_state.get('filter_options', {})
         with f_col1:
             allowed_filters = ['No. Pesanan', 'Nama Produk']
             available_filters = [col for col in allowed_filters if col in result.columns]
             if available_filters:
                 filter_col = st.selectbox("Filter berdasarkan:", available_filters)
-                unique_values = result[filter_col].unique().tolist()
+                # Gunakan opsi dari file order (mencerminkan semua pesanan valid sesuai date range)
+                unique_values = filter_options.get(filter_col, sorted(result[filter_col].dropna().astype(str).unique().tolist()))
                 selected_values = st.multiselect(f"Pilih nilai untuk {filter_col}:", unique_values, default=[])
                 if selected_values:
-                    filtered_result = result[result[filter_col].isin(selected_values)].copy()
+                    filtered_result = result[result[filter_col].astype(str).isin([str(v) for v in selected_values])].copy()
                 else:
                     filtered_result = result.copy()
             else:

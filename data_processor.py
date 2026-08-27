@@ -24,6 +24,44 @@ def get_order_date_bounds(order_file):
         return None, None
 
 
+def get_order_filter_options(order_file, start_date=None, end_date=None):
+    """Membaca file Order dan mengembalikan daftar unik No. Pesanan dan Nama Produk
+    yang sesuai dengan rentang tanggal dan filter status pesanan valid.
+
+    Returns:
+        dict: {'No. Pesanan': [...], 'Nama Produk': [...]}
+    """
+    try:
+        usecols = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Resi', 'No. Pesanan', 'Nama Produk', 'Nama Variasi']
+        df = pd.read_excel(order_file, sheet_name='orders', usecols=usecols)
+
+        # Filter tanggal
+        if start_date and end_date:
+            df['Waktu Pesanan Dibuat'] = pd.to_datetime(df['Waktu Pesanan Dibuat'], errors='coerce')
+            start_dt = pd.to_datetime(start_date).normalize()
+            end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            df = df[(df['Waktu Pesanan Dibuat'] >= start_dt) & (df['Waktu Pesanan Dibuat'] <= end_dt)]
+
+        # Filter status valid (sama seperti process_reconciliation)
+        df = df[df['Status Pesanan'] != 'Batal']
+        df = df[df['No. Resi'].notna()]
+
+        # Daftar No. Pesanan unik
+        order_ids = sorted(df['No. Pesanan'].dropna().astype(str).unique().tolist())
+
+        # Daftar Nama Produk unik (gabungan nama + variasi, sama seperti tampilan di tabel)
+        df['Nama Produk'] = df['Nama Produk'].fillna('')
+        df['Nama Variasi'] = df['Nama Variasi'].fillna('')
+        df['Nama Produk Tampilan'] = df.apply(
+            lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1
+        )
+        product_names = sorted(df['Nama Produk Tampilan'].dropna().unique().tolist())
+
+        return {'No. Pesanan': order_ids, 'Nama Produk': product_names}
+    except Exception:
+        return {'No. Pesanan': [], 'Nama Produk': []}
+
+
 def extract_adjustments(income_file):
     """Membaca sheet Adjustment dari file laporan Penghasilan.
     
