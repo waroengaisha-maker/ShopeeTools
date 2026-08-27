@@ -57,6 +57,12 @@ def extract_adjustments(income_file):
     df_adj['Biaya Penyesuaian'] = pd.to_numeric(df_adj['Biaya Penyesuaian'], errors='coerce').fillna(0).round().astype(int)
     df_adj['No. Pesanan'] = df_adj['No. Pesanan Terhubung'].astype(str).str.strip()
     
+    # Isi NaN pada kolom teks agar tidak tampil sebagai 'None' di UI
+    if 'Alasan Penyesuaian' in df_adj.columns:
+        df_adj['Alasan Penyesuaian'] = df_adj['Alasan Penyesuaian'].fillna('-')
+    if 'Tipe Penyesuaian | Deskripsi' in df_adj.columns:
+        df_adj['Tipe Penyesuaian | Deskripsi'] = df_adj['Tipe Penyesuaian | Deskripsi'].fillna('-')
+
     # Pilih dan rapikan kolom yang informatif
     cols_to_keep = [
         'Tanggal Penyesuaian Dibuat',
