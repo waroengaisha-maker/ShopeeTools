@@ -61,6 +61,10 @@ html, body, [class*="css"] {
 .card-net .value { color: #4ade80; }
 .card-daily .value { color: #c084fc; }
 .card-daily .pct { font-size: 0.78rem; color: #a78bfa; margin-top: 0.2rem; }
+.card-potential .value { color: #fbbf24; }
+.card-potential .pct { font-size: 0.78rem; color: #fde68a; margin-top: 0.2rem; }
+.card-grand .value { color: #2dd4bf; }
+.card-grand .pct { font-size: 0.78rem; color: #99f6e4; margin-top: 0.2rem; }
 .card-settle .value { color: #38bdf8; }
 .card-settle .pct { font-size: 0.78rem; margin-top: 0.2rem; }
 .unsettled-badge {
@@ -266,8 +270,22 @@ if uploaded_order and uploaded_income:
             total_penyesuaian = 0
             relevant_adj = pd.DataFrame()
 
-        # Total Penghasilan Bersih = Subtotal + Total Biaya + Total Penyesuaian (Total Biaya & Penyesuaian bernilai negatif)
+        # Total Penghasilan Bersih (Settled) = Subtotal + Total Biaya + Total Penyesuaian
         total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
+        pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
+
+        # ─── Perhitungan Estimasi Potensi Penghasilan dari Unsettled Orders ───
+        unsettled_result = filtered_result[filtered_result['Is_Settled'] == False].copy() if 'Is_Settled' in filtered_result.columns else pd.DataFrame()
+        unsettled_subtotal = int(unsettled_result['Subtotal'].sum()) if not unsettled_result.empty else 0
+        
+        # Rasio fee rata-rata dari pesanan yang sudah settled (fallback ke 15% jika belum ada settled)
+        effective_fee_ratio = (abs(total_biaya) / total_subtotal) if total_subtotal > 0 else 0.15
+        
+        # Estimasi biaya dan estimasi bersih untuk unsettled orders
+        est_unsettled_net = int(unsettled_subtotal * (1 - effective_fee_ratio))
+        
+        # Total Keseluruhan (Settled Real + Estimasi Unsettled)
+        total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
 
         # Hitung rata-rata penghasilan per hari berdasarkan rentang tanggal yang diproses
         proc_start = st.session_state.get('processed_start_date')
@@ -278,8 +296,7 @@ if uploaded_order and uploaded_income:
         else:
             num_days = None
         avg_per_hari = total_penghasilan / num_days if num_days and num_days > 0 else None
-
-        pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
+        avg_per_hari_fmt = f"Rp {avg_per_hari:,.0f}" if avg_per_hari is not None else ""
 
         st.subheader("💰 Ringkasan Rekonsiliasi")
         # Label rentang hari
@@ -289,18 +306,6 @@ if uploaded_order and uploaded_income:
             period_label = ""
         if period_label:
             st.caption(f"📅 Periode: **{period_label}**")
-
-        # Rata-rata penghasilan per hari card
-        avg_per_hari_fmt = f"Rp {avg_per_hari:,.0f}" if avg_per_hari is not None else ""
-        daily_card = ""
-        if avg_per_hari is not None:
-            daily_card = (
-                '<div class="summary-card card-daily">'
-                '<div class="label">Rata-rata Penghasilan / Hari</div>'
-                '<div class="value">' + avg_per_hari_fmt + '</div>'
-                '<div class="pct">' + str(num_days) + ' hari periode aktif</div>'
-                '</div>'
-            )
 
         # Ambil statistik settlement
         settle_stats = st.session_state.get('settlement_stats', {})
@@ -313,36 +318,80 @@ if uploaded_order and uploaded_income:
         settle_color = "#4ade80" if settle_rate == 100 else ("#facc15" if settle_rate >= 80 else "#f87171")
         settle_pct_color = "#86efac" if settle_rate == 100 else ("#fde047" if settle_rate >= 80 else "#fca5a5")
 
-        settle_card = f"""
-        <div class="summary-card card-settle">
-            <div class="label">Status Settlement</div>
-            <div class="value" style="color: {settle_color};">{settle_rate:.1f}%</div>
-            <div class="pct" style="color: {settle_pct_color};">{settled_count}/{total_orders_valid} pesanan selesai</div>
-        </div>
-        """
-
-        summary_html = (
-            '<div class="summary-container">'
+        # Kartu-kartu summary (dibuat single-line agar tidak memicu code block di Streamlit markdown)
+        gross_card = (
             '<div class="summary-card card-gross">'
             '<div class="label">Total Subtotal (Gross)</div>'
             f'<div class="value">Rp {total_subtotal:,.0f}</div>'
             '</div>'
+        )
+        fees_card = (
             '<div class="summary-card card-fees">'
             '<div class="label">Total Biaya (Fees)</div>'
             f'<div class="value">Rp {total_biaya:,.0f}</div>'
             f'<div class="pct">{pct_biaya:.1f}% dari Subtotal</div>'
             '</div>'
+        )
+        adj_card = (
             '<div class="summary-card card-adj">'
             '<div class="label">Total Penyesuaian (Adjustment)</div>'
             f'<div class="value">Rp {total_penyesuaian:,.0f}</div>'
             '</div>'
+        )
+        net_card = (
             '<div class="summary-card card-net">'
-            '<div class="label">Total Penghasilan Bersih</div>'
+            '<div class="label">Penghasilan Bersih (Settled)</div>'
             f'<div class="value">Rp {total_penghasilan:,.0f}</div>'
             '</div>'
-            + daily_card
-            + settle_card +
+        )
+
+        potential_card = ""
+        grand_total_card = ""
+        if not unsettled_result.empty:
+            potential_card = (
+                '<div class="summary-card card-potential">'
+                '<div class="label">Estimasi Potensi Pending</div>'
+                f'<div class="value">Rp {est_unsettled_net:,.0f}</div>'
+                f'<div class="pct">Subtotal Rp {unsettled_subtotal:,.0f} (est. fee {effective_fee_ratio*100:.1f}%)</div>'
+                '</div>'
+            )
+            grand_total_card = (
+                '<div class="summary-card card-grand">'
+                '<div class="label">Total Proyeksi Bersih</div>'
+                f'<div class="value">Rp {total_proyeksi_keseluruhan:,.0f}</div>'
+                '<div class="pct">Settled + Estimasi Pending</div>'
+                '</div>'
+            )
+
+        daily_card = ""
+        if avg_per_hari is not None:
+            daily_card = (
+                '<div class="summary-card card-daily">'
+                '<div class="label">Rata-rata Penghasilan / Hari</div>'
+                f'<div class="value">{avg_per_hari_fmt}</div>'
+                f'<div class="pct">{num_days} hari periode aktif</div>'
+                '</div>'
+            )
+
+        settle_card = (
+            '<div class="summary-card card-settle">'
+            '<div class="label">Status Settlement</div>'
+            f'<div class="value" style="color: {settle_color};">{settle_rate:.1f}%</div>'
+            f'<div class="pct" style="color: {settle_pct_color};">{settled_count}/{total_orders_valid} pesanan selesai</div>'
             '</div>'
+        )
+
+        summary_html = (
+            '<div class="summary-container">'
+            + gross_card
+            + fees_card
+            + adj_card
+            + net_card
+            + potential_card
+            + grand_total_card
+            + daily_card
+            + settle_card
+            + '</div>'
         )
         st.markdown(summary_html, unsafe_allow_html=True)
 
@@ -389,7 +438,11 @@ if uploaded_order and uploaded_income:
             st.markdown(f"""
             <div style="background: rgba(239, 68, 68, 0.08); border-left: 4px solid #ef4444; padding: 0.8rem 1.2rem; border-radius: 8px; margin-bottom: 1.2rem;">
                 <div style="font-size: 0.88rem; color: #fca5a5; font-weight: 600; margin-bottom: 0.4rem;">
-                    Ditemukan {unsettled_count} pesanan ({100 - settle_rate:.1f}%) yang belum ada di laporan Penghasilan (biaya/potongan masih Rp 0 karena belum settlement):
+                    Ditemukan {unsettled_count} pesanan ({100 - settle_rate:.1f}%) yang belum settlement:
+                </div>
+                <div style="font-size: 0.82rem; color: #f87171; margin-bottom: 0.6rem;">
+                    • Subtotal Gross Pending: <b>Rp {unsettled_subtotal:,.0f}</b><br>
+                    • Estimasi Bersih Cair (setelah est. fee {effective_fee_ratio*100:.1f}%): <b>Rp {est_unsettled_net:,.0f}</b>
                 </div>
                 <div>{unsettled_badges_html}</div>
             </div>
