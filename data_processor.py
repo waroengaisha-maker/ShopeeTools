@@ -24,6 +24,55 @@ def get_order_date_bounds(order_file):
         return None, None
 
 
+def extract_adjustments(income_file):
+    """Membaca sheet Adjustment dari file laporan Penghasilan.
+    
+    Returns:
+        pd.DataFrame: DataFrame berisi detail penyesuaian per pesanan.
+    """
+    try:
+        df_raw = pd.read_excel(income_file, sheet_name='Adjustment', header=None)
+    except Exception:
+        return pd.DataFrame()
+        
+    header_idx = None
+    for idx, row in df_raw.iterrows():
+        vals = [str(x).strip() for x in row.dropna().tolist()]
+        if 'No. Pesanan Terhubung' in vals:
+            header_idx = idx
+            break
+            
+    if header_idx is None:
+        return pd.DataFrame()
+        
+    df_adj = pd.read_excel(income_file, sheet_name='Adjustment', header=header_idx)
+    
+    # Filter hanya baris transaksi valid (No. Pesanan Terhubung tidak kosong dan bukan baris Total)
+    if 'No. Pesanan Terhubung' not in df_adj.columns:
+        return pd.DataFrame()
+        
+    df_adj = df_adj[df_adj['No. Pesanan Terhubung'].notna()]
+    df_adj = df_adj[~df_adj['No. Pesanan Terhubung'].astype(str).str.contains('Total|nan', case=False)]
+    
+    df_adj['Biaya Penyesuaian'] = pd.to_numeric(df_adj['Biaya Penyesuaian'], errors='coerce').fillna(0).round().astype(int)
+    df_adj['No. Pesanan'] = df_adj['No. Pesanan Terhubung'].astype(str).str.strip()
+    
+    # Pilih dan rapikan kolom yang informatif
+    cols_to_keep = [
+        'Tanggal Penyesuaian Dibuat',
+        'No. Pesanan',
+        'Tipe Penyesuaian | Deskripsi',
+        'Alasan Penyesuaian',
+        'Biaya Penyesuaian',
+        'Tanggal Dana Dilepaskan'
+    ]
+    existing_cols = [c for c in cols_to_keep if c in df_adj.columns]
+    df_adj = df_adj[existing_cols].reset_index(drop=True)
+    df_adj.insert(0, 'No.', range(1, len(df_adj) + 1))
+    
+    return df_adj
+
+
 def format_thousands(val):
     """Format angka dengan pemisah ribuan koma (contoh: 1,234,567)."""
     if val == '' or pd.isna(val):

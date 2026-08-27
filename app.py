@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from data_processor import (
     process_reconciliation, add_total_row, format_thousands,
-    get_order_date_bounds,
+    get_order_date_bounds, extract_adjustments,
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 import io
@@ -20,12 +20,12 @@ html, body, [class*="css"] {
 
 /* Summary cards */
 .summary-container {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 1.2rem;
     margin: 1rem 0 1.5rem 0;
 }
 .summary-card {
-    flex: 1;
     padding: 1.3rem 1.6rem;
     border-radius: 14px;
     background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
@@ -45,7 +45,7 @@ html, body, [class*="css"] {
     margin-bottom: 0.35rem;
 }
 .summary-card .value {
-    font-size: 1.65rem;
+    font-size: 1.55rem;
     font-weight: 700;
     letter-spacing: -0.02em;
 }
@@ -56,6 +56,7 @@ html, body, [class*="css"] {
 }
 .card-gross .value { color: #38bdf8; }
 .card-fees .value { color: #f87171; }
+.card-adj .value { color: #eab308; }
 .card-net .value { color: #4ade80; }
 </style>
 """, unsafe_allow_html=True)
@@ -96,6 +97,10 @@ if uploaded_order and uploaded_income:
                 uploaded_order, uploaded_income,
                 start_date=start_date, end_date=end_date
             )
+            # Ambil data penyesuaian (Adjustment) dari sheet Adjustment
+            uploaded_income.seek(0)
+            st.session_state.df_adjustments = extract_adjustments(uploaded_income)
+
         # Reset date bounds cache saat proses ulang
         if 'date_bounds' in st.session_state:
             del st.session_state['date_bounds']
@@ -103,6 +108,7 @@ if uploaded_order and uploaded_income:
     
     if 'result' in st.session_state:
         result = st.session_state.result
+        df_adj = st.session_state.get('df_adjustments', pd.DataFrame())
         
         # ─── Filter & Sorting ───
         st.subheader("🔍 Filter & Pengurutan Data")
@@ -155,7 +161,17 @@ if uploaded_order and uploaded_income:
         # ─── Ringkasan Finansial (di luar tabel) ───
         total_subtotal = int(filtered_result['Subtotal'].sum())
         total_biaya = int(filtered_result['Total Biaya'].sum())
-        total_penghasilan = total_subtotal + total_biaya  # Total Biaya negatif
+        
+        # Hitung total penyesuaian (berdasarkan filter pesanan yang aktif jika ada filter)
+        if not df_adj.empty:
+            active_orders = set(filtered_result['No. Pesanan'].unique())
+            relevant_adj = df_adj[df_adj['No. Pesanan'].isin(active_orders)] if selected_values and filter_col == 'No. Pesanan' else df_adj
+            total_penyesuaian = int(relevant_adj['Biaya Penyesuaian'].sum()) if not relevant_adj.empty else 0
+        else:
+            total_penyesuaian = 0
+
+        # Total Penghasilan Bersih = Subtotal + Total Biaya + Total Penyesuaian (Total Biaya & Penyesuaian bernilai negatif)
+        total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
 
         pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
 
@@ -171,6 +187,10 @@ if uploaded_order and uploaded_income:
                 <div class="value">Rp {total_biaya:,.0f}</div>
                 <div class="pct">{pct_biaya:.1f}% dari Subtotal</div>
             </div>
+            <div class="summary-card card-adj">
+                <div class="label">Total Penyesuaian (Adjustment)</div>
+                <div class="value">Rp {total_penyesuaian:,.0f}</div>
+            </div>
             <div class="summary-card card-net">
                 <div class="label">Total Penghasilan Bersih</div>
                 <div class="value">Rp {total_penghasilan:,.0f}</div>
@@ -178,7 +198,7 @@ if uploaded_order and uploaded_income:
         </div>
         """, unsafe_allow_html=True)
 
-        # ─── Tabel Detail ───
+        # ─── Tabel Detail Produk ───
         st.subheader("📋 Detail Data Produk")
 
         display_df = filtered_result.copy()
@@ -208,12 +228,28 @@ if uploaded_order and uploaded_income:
             column_config=cols_config
         )
         
+        # ─── Tabel Detail Penyesuaian (Adjustment) ───
+        if not df_adj.empty:
+            st.subheader("⚖️ Detail Penyesuaian (Adjustment)")
+            st.caption("Penyesuaian saldo / pengembalian dana setelah dana dilepaskan berdasarkan No. Pesanan")
+            adj_cols_config = {
+                'Biaya Penyesuaian': st.column_config.NumberColumn("Biaya Penyesuaian", format="%,d")
+            }
+            st.dataframe(
+                df_adj,
+                use_container_width=True,
+                hide_index=True,
+                column_config=adj_cols_config
+            )
+
         # ─── Export Excel (raw integer, tanpa formatting) ───
         final_result_excel = add_total_row(filtered_result)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            final_result_excel.to_excel(writer, index=False)
+            final_result_excel.to_excel(writer, sheet_name='Hasil Rekonsiliasi', index=False)
+            if not df_adj.empty:
+                df_adj.to_excel(writer, sheet_name='Penyesuaian (Adjustment)', index=False)
         
         st.download_button(
             label="📥 Unduh Laporan Excel Lengkap (.xlsx)",
