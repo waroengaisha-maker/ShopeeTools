@@ -58,6 +58,52 @@ html, body, [class*="css"] {
 .card-fees .value { color: #f87171; }
 .card-adj .value { color: #eab308; }
 .card-net .value { color: #4ade80; }
+
+/* Fee breakdown pills */
+.breakdown-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.85rem;
+    margin: 0.8rem 0 1.5rem 0;
+}
+.breakdown-card {
+    padding: 0.9rem 1.1rem;
+    border-radius: 10px;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #f8fafc;
+}
+.breakdown-card .title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 0.25rem;
+}
+.breakdown-card .val {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+.breakdown-card .sub {
+    font-size: 0.72rem;
+    color: #fb923c;
+    margin-top: 0.15rem;
+}
+
+/* Tag / Highlight */
+.adj-badge {
+    display: inline-block;
+    background: rgba(234, 179, 8, 0.15);
+    color: #facc15;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin: 0.2rem 0.3rem 0.2rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,11 +208,26 @@ if uploaded_order and uploaded_income:
         total_subtotal = int(filtered_result['Subtotal'].sum())
         total_biaya = int(filtered_result['Total Biaya'].sum())
         
+        # Hitung rincian per komponen biaya
+        tot_adm = int(filtered_result['Biaya Administrasi'].sum()) if 'Biaya Administrasi' in filtered_result.columns else 0
+        tot_xtra = int(filtered_result['Biaya Gratis Ongkir XTRA'].sum()) if 'Biaya Gratis Ongkir XTRA' in filtered_result.columns else 0
+        tot_promo = int(filtered_result['Biaya Promo XTRA'].sum()) if 'Biaya Promo XTRA' in filtered_result.columns else 0
+        tot_sub_biaya = int(filtered_result['Subtotal Biaya'].sum()) if 'Subtotal Biaya' in filtered_result.columns else (tot_adm + tot_xtra + tot_promo)
+        tot_proses = int(filtered_result['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in filtered_result.columns else 0
+        tot_pajak = int(filtered_result['Pajak'].sum()) if 'Pajak' in filtered_result.columns else 0
+
+        pct_adm = abs(tot_adm) / total_subtotal * 100 if total_subtotal > 0 else 0
+        pct_xtra = abs(tot_xtra) / total_subtotal * 100 if total_subtotal > 0 else 0
+        pct_promo = abs(tot_promo) / total_subtotal * 100 if total_subtotal > 0 else 0
+        pct_sub_biaya = abs(tot_sub_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
+
         # Hitung total penyesuaian (berdasarkan filter pesanan yang aktif jika ada filter)
+        adj_orders_list = []
         if not df_adj.empty:
             active_orders = set(filtered_result['No. Pesanan'].unique())
             relevant_adj = df_adj[df_adj['No. Pesanan'].isin(active_orders)] if selected_values and filter_col == 'No. Pesanan' else df_adj
             total_penyesuaian = int(relevant_adj['Biaya Penyesuaian'].sum()) if not relevant_adj.empty else 0
+            adj_orders_list = [o for o in df_adj['No. Pesanan'].unique().tolist() if o and o != 'nan']
         else:
             total_penyesuaian = 0
 
@@ -197,6 +258,54 @@ if uploaded_order and uploaded_income:
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+        # ─── Rincian Komponen Biaya ───
+        with st.expander("📊 Rincian Detail Komponen Biaya", expanded=True):
+            st.markdown(f"""
+            <div class="breakdown-container">
+                <div class="breakdown-card">
+                    <div class="title">Biaya Administrasi</div>
+                    <div class="val">Rp {tot_adm:,.0f}</div>
+                    <div class="sub">{pct_adm:.2f}% dari Subtotal</div>
+                </div>
+                <div class="breakdown-card">
+                    <div class="title">Gratis Ongkir XTRA</div>
+                    <div class="val">Rp {tot_xtra:,.0f}</div>
+                    <div class="sub">{pct_xtra:.2f}% dari Subtotal</div>
+                </div>
+                <div class="breakdown-card">
+                    <div class="title">Biaya Promo XTRA</div>
+                    <div class="val">Rp {tot_promo:,.0f}</div>
+                    <div class="sub">{pct_promo:.2f}% dari Subtotal</div>
+                </div>
+                <div class="breakdown-card">
+                    <div class="title">Subtotal Biaya</div>
+                    <div class="val">Rp {tot_sub_biaya:,.0f}</div>
+                    <div class="sub">{pct_sub_biaya:.2f}% dari Subtotal</div>
+                </div>
+                <div class="breakdown-card">
+                    <div class="title">Proses Pesanan</div>
+                    <div class="val">Rp {tot_proses:,.0f}</div>
+                </div>
+                <div class="breakdown-card">
+                    <div class="title">Pajak (PPh 22)</div>
+                    <div class="val">Rp {tot_pajak:,.0f}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # ─── Highlight No. Pesanan dengan Penyesuaian ───
+        if adj_orders_list:
+            st.markdown("##### ⚠️ Highlight Pesanan dengan Biaya Penyesuaian (Adjustment)")
+            badges_html = " ".join([f'<span class="adj-badge">📦 {order}</span>' for order in adj_orders_list])
+            st.markdown(f"""
+            <div style="background: rgba(234, 179, 8, 0.08); border-left: 4px solid #eab308; padding: 0.8rem 1.2rem; border-radius: 8px; margin-bottom: 1.2rem;">
+                <div style="font-size: 0.88rem; color: #fde047; font-weight: 600; margin-bottom: 0.4rem;">
+                    Ditemukan {len(adj_orders_list)} pesanan yang memiliki potongan/penyesuaian saldo setelah dana dilepas:
+                </div>
+                <div>{badges_html}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
         # ─── Tabel Detail Produk ───
         st.subheader("📋 Detail Data Produk")
