@@ -267,6 +267,64 @@ def add_total_row(df):
     summary_df = pd.DataFrame([total_row, total_penghasilan_row])
     return pd.concat([df, summary_df], ignore_index=True)
 
+
+def generate_product_summary(df):
+    """Membuat tabel rekapitulasi penjualan per produk (group by Nama Produk dan Harga (@)).
+    
+    Kolom: No., Nama Produk, Total Jumlah Bersih, Harga (@), Total Penjualan Bersih.
+    Dilengkapi baris Total di bagian akhir.
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    # Salin dan abaikan baris Total / Total Penghasilan jika sudah ada
+    clean_df = df.copy()
+    if 'No. Pesanan' in clean_df.columns:
+        clean_df = clean_df[~clean_df['No. Pesanan'].astype(str).isin(['Total', 'Total Penghasilan', ''])].copy()
+    if 'Nama Produk' in clean_df.columns:
+        clean_df = clean_df[~clean_df['Nama Produk'].astype(str).isin(['Total', 'Total Penghasilan'])].copy()
+
+    if clean_df.empty:
+        return pd.DataFrame()
+
+    # Pastikan tipe data numerik
+    clean_df['Jumlah Bersih'] = pd.to_numeric(clean_df['Jumlah Bersih'], errors='coerce').fillna(0).astype(int)
+    clean_df['Harga (@)'] = pd.to_numeric(clean_df['Harga (@)'], errors='coerce').fillna(0).astype(int)
+
+    # Grouping berdasarkan Nama Produk dan Harga (@)
+    grouped = clean_df.groupby(['Nama Produk', 'Harga (@)'], as_index=False).agg({
+        'Jumlah Bersih': 'sum'
+    })
+
+    # Hitung total penjualan bersih (nominal)
+    grouped['Total Penjualan Bersih'] = (grouped['Jumlah Bersih'] * grouped['Harga (@)']).astype(int)
+
+    # Urutkan berdasarkan Nama Produk lalu Harga (@)
+    grouped = grouped.sort_values(by=['Nama Produk', 'Harga (@)'], ascending=[True, True]).reset_index(drop=True)
+
+    # Atur posisi kolom: Total Jumlah Bersih sebelum Harga (@)
+    grouped = grouped.rename(columns={'Jumlah Bersih': 'Total Jumlah Bersih'})
+    grouped = grouped[['Nama Produk', 'Total Jumlah Bersih', 'Harga (@)', 'Total Penjualan Bersih']]
+
+    # Sisipkan nomor urut 1..N
+    grouped.insert(0, 'No.', range(1, len(grouped) + 1))
+
+    # Hitung baris Total
+    tot_qty = int(grouped['Total Jumlah Bersih'].sum())
+    tot_sales = int(grouped['Total Penjualan Bersih'].sum())
+
+    row_total = {
+        'No.': '',
+        'Nama Produk': 'Total',
+        'Total Jumlah Bersih': tot_qty,
+        'Harga (@)': '',
+        'Total Penjualan Bersih': tot_sales
+    }
+
+    grouped = pd.concat([grouped, pd.DataFrame([row_total])], ignore_index=True)
+    return grouped
+
+
 def process_reconciliation(order_file, income_file, start_date=None, end_date=None, add_total=False):
     # 1. Load Data (force Harga Setelah Diskon as string to preserve formatting like 8.500)
     df_order = pd.read_excel(order_file, sheet_name='orders', dtype={'Harga Setelah Diskon': str})
@@ -333,41 +391,58 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Kolom biaya di df_income SEBELUM merger
     
     # 1. Biaya Administrasi & Biaya Proses Pesanan (dipisahkan)
-    df_income['Biaya Administrasi'] = df_income['Biaya Administrasi'].fillna(0)
-    df_income['Biaya Proses Pesanan'] = df_income['Biaya Proses Pesanan'].fillna(0)
+    df_income['Biaya Administrasi'] = df_income['Biaya Administrasi'].fillna(0) if 'Biaya Administrasi' in df_income.columns else 0
+    df_income['Biaya Proses Pesanan'] = df_income['Biaya Proses Pesanan'].fillna(0) if 'Biaya Proses Pesanan' in df_income.columns else 0
     
-    # 2. Biaya Gratis Ongkir XTRA
-    xtra_cols = [
+    # 2. Biaya Gratis Ongkir XTRA (ambil kolom yang ada di dataframe)
+    all_xtra_cols = [
         'Biaya Gratis Ongkir XTRA - Ukuran Khusus (Kategori E)',
         'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori D)',
         'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori E)',
         'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori G)'
     ]
-    df_income['Biaya Gratis Ongkir XTRA'] = df_income[xtra_cols].fillna(0).sum(axis=1)
+    # Bisa juga tangkap otomatis kolom yang mengandung kata Gratis Ongkir XTRA
+    matched_xtra_cols = [c for c in df_income.columns if 'Gratis Ongkir XTRA' in str(c)]
+    xtra_cols = list(set([c for c in all_xtra_cols if c in df_income.columns] + matched_xtra_cols))
     
-    # 3. Biaya Promo XTRA
-    layanan_cols = ['Biaya Transaksi', 'Biaya Layanan Promo XTRA']
-    df_income['Biaya Promo XTRA'] = df_income[layanan_cols].fillna(0).sum(axis=1)
+    if xtra_cols:
+        df_income['Biaya Gratis Ongkir XTRA'] = df_income[xtra_cols].fillna(0).sum(axis=1)
+    else:
+        df_income['Biaya Gratis Ongkir XTRA'] = 0
+    
+    # 3. Biaya Promo XTRA (ambil kolom yang ada di dataframe)
+    all_layanan_cols = ['Biaya Transaksi', 'Biaya Layanan Promo XTRA']
+    layanan_cols = [c for c in all_layanan_cols if c in df_income.columns]
+    if layanan_cols:
+        df_income['Biaya Promo XTRA'] = df_income[layanan_cols].fillna(0).sum(axis=1)
+    else:
+        df_income['Biaya Promo XTRA'] = 0
     
     # 4. Pajak
-    df_income['Pajak'] = df_income['PPh 22'].fillna(0)
+    if 'PPh 22' in df_income.columns:
+        df_income['Pajak'] = df_income['PPh 22'].fillna(0)
+    elif 'Pajak' in df_income.columns:
+        df_income['Pajak'] = df_income['Pajak'].fillna(0)
+    else:
+        df_income['Pajak'] = 0
     
-    # Hitung Total Biaya
-    fee_columns = [
+    # Hitung Total Biaya secara dinamis berdasarkan kolom biaya yang ada
+    candidate_fee_columns = [
         'Biaya Administrasi', 
         'Biaya Proses Pesanan', 
-        'Biaya Gratis Ongkir XTRA - Ukuran Khusus (Kategori E)',
-        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori D)',
-        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori E)',
-        'Biaya Gratis Ongkir XTRA - Ukuran Biasa (Kategori G)',
         'Biaya Transaksi',
         'Biaya Layanan Promo XTRA',
         'Biaya Kampanye',
         'Biaya Komisi AMS',
         'PPh 22'
-    ]
+    ] + xtra_cols
     
-    df_income['Total Biaya'] = df_income[fee_columns].fillna(0).sum(axis=1)
+    actual_fee_columns = list(set([c for c in candidate_fee_columns if c in df_income.columns]))
+    
+    if actual_fee_columns:
+        df_income['Total Biaya'] = df_income[actual_fee_columns].fillna(0).sum(axis=1)
+    else:
+        df_income['Total Biaya'] = 0
     
     # Re-merge setelah hitung Total Biaya
     cols_to_merge = keys + ['Total Biaya', 'Biaya Administrasi', 'Biaya Proses Pesanan', 'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Pajak']

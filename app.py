@@ -3,7 +3,7 @@ import pandas as pd
 from data_processor import (
     process_reconciliation, add_total_row, format_thousands,
     get_order_date_bounds, get_order_filter_options, extract_adjustments,
-    get_settlement_stats,
+    get_settlement_stats, generate_product_summary,
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 import io
@@ -474,12 +474,31 @@ if uploaded_order and uploaded_income:
                 column_config=adj_cols_config
             )
 
+        # ─── Tabel Rekapitulasi Produk (Grouping) ───
+        df_product_summary = generate_product_summary(filtered_result)
+        if not df_product_summary.empty:
+            with st.expander("📦 Rekapitulasi Penjualan Bersih per Produk", expanded=False):
+                st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dengan akumulasi Total Jumlah Bersih")
+                prod_cols_config = {
+                    'Total Jumlah Bersih': st.column_config.NumberColumn("Total Jumlah Bersih", format="%d"),
+                    'Harga (@)': st.column_config.NumberColumn("Harga (@)", format="%,d"),
+                    'Total Penjualan Bersih': st.column_config.NumberColumn("Total Penjualan Bersih", format="%,d")
+                }
+                st.dataframe(
+                    df_product_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=prod_cols_config
+                )
+
         # ─── Export Excel (raw integer, tanpa formatting) ───
         final_result_excel = add_total_row(filtered_result)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             final_result_excel.to_excel(writer, sheet_name='Hasil Rekonsiliasi', index=False)
+            if not df_product_summary.empty:
+                df_product_summary.to_excel(writer, sheet_name='Rekap Produk', index=False)
             if not relevant_adj.empty:
                 relevant_adj.to_excel(writer, sheet_name='Penyesuaian (Adjustment)', index=False)
         
