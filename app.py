@@ -364,12 +364,22 @@ if uploaded_order and uploaded_income:
             )
 
         daily_card = ""
+        daily_proj_card = ""
         if avg_per_hari is not None:
             daily_card = (
                 '<div class="summary-card card-daily">'
-                '<div class="label">Rata-rata Penghasilan / Hari</div>'
+                '<div class="label">Penghasilan Real / Hari</div>'
                 f'<div class="value">{avg_per_hari_fmt}</div>'
-                f'<div class="pct">{num_days} hari periode aktif</div>'
+                f'<div class="pct">Real Settled ({num_days} hari)</div>'
+                '</div>'
+            )
+            # Hitung proyeksi bersih per hari (Settled + Estimasi Pending / hari)
+            avg_proj_per_hari = total_proyeksi_keseluruhan / num_days if num_days and num_days > 0 else total_proyeksi_keseluruhan
+            daily_proj_card = (
+                '<div class="summary-card card-grand">'
+                '<div class="label">Proyeksi Bersih / Hari</div>'
+                f'<div class="value">Rp {avg_proj_per_hari:,.0f}</div>'
+                f'<div class="pct">Proyeksi Total ({num_days} hari)</div>'
                 '</div>'
             )
 
@@ -390,6 +400,7 @@ if uploaded_order and uploaded_income:
             + potential_card
             + grand_total_card
             + daily_card
+            + daily_proj_card
             + settle_card
             + '</div>'
         )

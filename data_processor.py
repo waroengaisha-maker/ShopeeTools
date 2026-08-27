@@ -43,7 +43,7 @@ def get_order_filter_options(order_file, start_date=None, end_date=None):
             df = df[(df['Waktu Pesanan Dibuat'] >= start_dt) & (df['Waktu Pesanan Dibuat'] <= end_dt)]
 
         # Filter status valid (sama seperti process_reconciliation)
-        df = df[df['Status Pesanan'] != 'Batal']
+        df = df[~df['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
         df = df[df['No. Resi'].notna()]
 
         # Daftar No. Pesanan unik
@@ -85,7 +85,7 @@ def get_settlement_stats(order_file, income_file, start_date=None, end_date=None
             end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             df_ord = df_ord[(df_ord['Waktu Pesanan Dibuat'] >= start_dt) & (df_ord['Waktu Pesanan Dibuat'] <= end_dt)]
 
-        df_ord = df_ord[df_ord['Status Pesanan'] != 'Batal']
+        df_ord = df_ord[~df_ord['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
         df_ord = df_ord[df_ord['No. Resi'].notna()]
         all_order_ids = set(df_ord['No. Pesanan'].dropna().astype(str).unique())
 
@@ -342,8 +342,8 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         df_order = df_order[(df_order['Waktu Pesanan Dibuat_dt'] >= start_dt) & (df_order['Waktu Pesanan Dibuat_dt'] <= end_dt)]
         df_order = df_order.drop(columns=['Waktu Pesanan Dibuat_dt'], errors='ignore')
 
-    # Filter: Status Pesanan != 'Batal' AND No. Resi is not null
-    df_order = df_order[df_order['Status Pesanan'] != 'Batal']
+    # Filter: Status Pesanan != 'Batal' & != 'Belum Bayar' AND No. Resi is not null
+    df_order = df_order[~df_order['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
     df_order = df_order[df_order['No. Resi'].notna()]
 
     # Hapus tanda titik pemisah ribuan dari kolom Harga Setelah Diskon
