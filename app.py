@@ -3,6 +3,7 @@ import pandas as pd
 from data_processor import (
     process_reconciliation, add_total_row, format_thousands,
     get_order_date_bounds, get_order_filter_options, extract_adjustments,
+    get_settlement_stats,
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 import io
@@ -60,6 +61,19 @@ html, body, [class*="css"] {
 .card-net .value { color: #4ade80; }
 .card-daily .value { color: #c084fc; }
 .card-daily .pct { font-size: 0.78rem; color: #a78bfa; margin-top: 0.2rem; }
+.card-settle .value { color: #38bdf8; }
+.card-settle .pct { font-size: 0.78rem; margin-top: 0.2rem; }
+.unsettled-badge {
+    display: inline-block;
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 6px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 0.2rem 0.2rem 0.2rem 0;
+}
 
 /* Fee breakdown pills */
 .breakdown-container {
@@ -152,6 +166,12 @@ if uploaded_order and uploaded_income:
             uploaded_order.seek(0)
             st.session_state.filter_options = get_order_filter_options(
                 uploaded_order, start_date=start_date, end_date=end_date
+            )
+            # Hitung statistik settlement
+            uploaded_order.seek(0)
+            uploaded_income.seek(0)
+            st.session_state.settlement_stats = get_settlement_stats(
+                uploaded_order, uploaded_income, start_date=start_date, end_date=end_date
             )
             # Simpan rentang tanggal yang diproses ke session_state
             st.session_state.processed_start_date = start_date
@@ -268,6 +288,7 @@ if uploaded_order and uploaded_income:
         if period_label:
             st.caption(f"📅 Periode: **{period_label}**")
 
+        # Rata-rata penghasilan per hari card
         avg_per_hari_fmt = f"Rp {avg_per_hari:,.0f}" if avg_per_hari is not None else ""
         daily_card = ""
         if avg_per_hari is not None:
@@ -278,6 +299,25 @@ if uploaded_order and uploaded_income:
                 '<div class="pct">' + str(num_days) + ' hari periode aktif</div>'
                 '</div>'
             )
+
+        # Ambil statistik settlement
+        settle_stats = st.session_state.get('settlement_stats', {})
+        settle_rate = settle_stats.get('settlement_rate', 100.0)
+        unsettled_count = settle_stats.get('unsettled_orders', 0)
+        settled_count = settle_stats.get('settled_orders', 0)
+        total_orders_valid = settle_stats.get('total_orders', 0)
+        unsettled_list = settle_stats.get('unsettled_list', [])
+
+        settle_color = "#4ade80" if settle_rate == 100 else ("#facc15" if settle_rate >= 80 else "#f87171")
+        settle_pct_color = "#86efac" if settle_rate == 100 else ("#fde047" if settle_rate >= 80 else "#fca5a5")
+
+        settle_card = f"""
+        <div class="summary-card card-settle">
+            <div class="label">Status Settlement</div>
+            <div class="value" style="color: {settle_color};">{settle_rate:.1f}%</div>
+            <div class="pct" style="color: {settle_pct_color};">{settled_count}/{total_orders_valid} pesanan selesai</div>
+        </div>
+        """
 
         summary_html = (
             '<div class="summary-container">'
@@ -298,7 +338,8 @@ if uploaded_order and uploaded_income:
             '<div class="label">Total Penghasilan Bersih</div>'
             f'<div class="value">Rp {total_penghasilan:,.0f}</div>'
             '</div>'
-            + daily_card +
+            + daily_card
+            + settle_card +
             '</div>'
         )
         st.markdown(summary_html, unsafe_allow_html=True)
@@ -339,6 +380,19 @@ if uploaded_order and uploaded_income:
             </div>
             """, unsafe_allow_html=True)
 
+        # ─── Highlight No. Pesanan Belum Settlement ───
+        if unsettled_list:
+            st.markdown("##### ⏳ Pesanan Belum Settlement (Dana Belum Dilepas Shopee)")
+            unsettled_badges_html = " ".join([f'<span class="unsettled-badge">⏳ {order}</span>' for order in unsettled_list])
+            st.markdown(f"""
+            <div style="background: rgba(239, 68, 68, 0.08); border-left: 4px solid #ef4444; padding: 0.8rem 1.2rem; border-radius: 8px; margin-bottom: 1.2rem;">
+                <div style="font-size: 0.88rem; color: #fca5a5; font-weight: 600; margin-bottom: 0.4rem;">
+                    Ditemukan {unsettled_count} pesanan ({100 - settle_rate:.1f}%) yang belum ada di laporan Penghasilan (biaya/potongan masih Rp 0 karena belum settlement):
+                </div>
+                <div>{unsettled_badges_html}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
         # ─── Highlight No. Pesanan dengan Penyesuaian ───
         if adj_orders_list:
             st.markdown("##### ⚠️ Highlight Pesanan dengan Biaya Penyesuaian (Adjustment)")
@@ -354,13 +408,32 @@ if uploaded_order and uploaded_income:
 
         # ─── Tabel Detail Produk ───
         st.subheader("📋 Detail Data Produk")
+        legends = []
         if 'Returned quantity' in filtered_result.columns and (filtered_result['Returned quantity'] > 0).any():
-            st.caption("🟡 Baris berwarna kuning menandakan produk dengan **Returned quantity > 0** (terkait penyesuaian/retur).")
+            legends.append("🟡 **Kuning**: Retur / Penyesuaian (Returned quantity > 0)")
+        if 'Is_Settled' in filtered_result.columns and (~filtered_result['Is_Settled']).any():
+            legends.append("🔴 **Merah**: Belum Settlement (Dana belum dilepas di Laporan Penghasilan)")
+        if legends:
+            st.caption(" | ".join(legends))
 
         display_df = filtered_result.copy()
 
+        # Fungsi highlight gabungan (Retur vs Belum Settlement)
+        def highlight_rows(row):
+            is_settled = row.get('Is_Settled', True)
+            ret_qty = row.get('Returned quantity', 0)
+            
+            if not is_settled:
+                return ['background-color: rgba(239, 68, 68, 0.18); color: #fca5a5; font-weight: 600;'] * len(row)
+            if pd.notna(ret_qty) and ret_qty > 0:
+                return ['background-color: rgba(234, 179, 8, 0.22); color: #fef08a; font-weight: 600;'] * len(row)
+            return [''] * len(row)
+
+        styled_df = display_df.style.apply(highlight_rows, axis=1)
+
         # Konfigurasi kolom: persentase dan ribuan
         cols_config = {
+            'Is_Settled': None,  # Sembunyikan kolom boolean internal dari display tabel
             COL_PCT_ADM: st.column_config.NumberColumn("(%)", format="%.2f%%"),
             COL_PCT_XTRA: st.column_config.NumberColumn("(%) ", format="%.2f%%"),
             COL_PCT_PROMO: st.column_config.NumberColumn("(%)  ", format="%.2f%%"),
@@ -379,15 +452,6 @@ if uploaded_order and uploaded_income:
         for col in thousand_cols:
             if col in display_df.columns and col not in ['Jumlah', 'Returned quantity', 'Jumlah Bersih']:
                 cols_config[col] = st.column_config.NumberColumn(col, format="%,d")
-
-        # Fungsi highlight baris yang memiliki Returned quantity > 0
-        def highlight_returned(row):
-            ret_qty = row.get('Returned quantity', 0)
-            if pd.notna(ret_qty) and ret_qty > 0:
-                return ['background-color: rgba(234, 179, 8, 0.22); color: #fef08a; font-weight: 600;'] * len(row)
-            return [''] * len(row)
-
-        styled_df = display_df.style.apply(highlight_returned, axis=1)
 
         st.dataframe(
             styled_df, 

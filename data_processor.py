@@ -62,6 +62,62 @@ def get_order_filter_options(order_file, start_date=None, end_date=None):
         return {'No. Pesanan': [], 'Nama Produk': []}
 
 
+def get_settlement_stats(order_file, income_file, start_date=None, end_date=None):
+    """Menghitung statistik settlement: berapa persen pesanan sudah ada di laporan penghasilan.
+
+    Returns:
+        dict: {
+            'total_orders': int,
+            'settled_orders': int,
+            'unsettled_orders': int,
+            'settlement_rate': float,  # 0-100
+            'unsettled_list': list[str]  # No. Pesanan yang belum settle
+        }
+    """
+    try:
+        # --- Order: semua pesanan valid dalam rentang tanggal ---
+        usecols_order = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Resi', 'No. Pesanan']
+        df_ord = pd.read_excel(order_file, sheet_name='orders', usecols=usecols_order)
+
+        if start_date and end_date:
+            df_ord['Waktu Pesanan Dibuat'] = pd.to_datetime(df_ord['Waktu Pesanan Dibuat'], errors='coerce')
+            start_dt = pd.to_datetime(start_date).normalize()
+            end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            df_ord = df_ord[(df_ord['Waktu Pesanan Dibuat'] >= start_dt) & (df_ord['Waktu Pesanan Dibuat'] <= end_dt)]
+
+        df_ord = df_ord[df_ord['Status Pesanan'] != 'Batal']
+        df_ord = df_ord[df_ord['No. Resi'].notna()]
+        all_order_ids = set(df_ord['No. Pesanan'].dropna().astype(str).unique())
+
+        # --- Income: No. Pesanan yang sudah ada di laporan Penghasilan ---
+        df_inc = pd.read_excel(income_file, sheet_name='Penghasilan', header=2)
+        df_inc = df_inc[df_inc['Total Penghasilan'] != 0]
+        df_inc = df_inc[df_inc['Lihat berdasarkan'] == 'Sku']
+        settled_ids = set(df_inc['No. Pesanan'].dropna().astype(str).unique())
+
+        settled = all_order_ids & settled_ids
+        unsettled = all_order_ids - settled_ids
+
+        total = len(all_order_ids)
+        rate = len(settled) / total * 100 if total > 0 else 0.0
+
+        return {
+            'total_orders': total,
+            'settled_orders': len(settled),
+            'unsettled_orders': len(unsettled),
+            'settlement_rate': rate,
+            'unsettled_list': sorted(unsettled)
+        }
+    except Exception as e:
+        return {
+            'total_orders': 0,
+            'settled_orders': 0,
+            'unsettled_orders': 0,
+            'settlement_rate': 0.0,
+            'unsettled_list': []
+        }
+
+
 def extract_adjustments(income_file):
     """Membaca sheet Adjustment dari file laporan Penghasilan.
     
@@ -245,6 +301,9 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Filter: Lihat berdasarkan == 'Sku'
     df_income = df_income[df_income['Lihat berdasarkan'] == 'Sku']
     
+    # Catat No. Pesanan yang sudah settlement di laporan Income (untuk flag Is_Settled)
+    settled_order_ids = set(df_income['No. Pesanan'].dropna().astype(str).unique())
+    
     # Pastikan Returned quantity terisi numerik (tanpa mengurangi Jumlah gross)
     df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0).astype(int)
     
@@ -381,25 +440,29 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result[COL_PCT_PROMO] = [abs(promo) / sub * 100 if sub > 0 else 0.0 for promo, sub in zip(result['Biaya Promo XTRA'], result['Subtotal'])]
     result[COL_PCT_SUB_BIAYA] = [abs(b) / sub * 100 if sub > 0 else 0.0 for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
     
+    # Tandai baris yang belum settlement (No. Pesanan tidak ada di laporan Penghasilan)
+    result['Is_Settled'] = result['No. Pesanan'].astype(str).isin(settled_order_ids)
+    
     # Atur posisi kolom:
     result = result[[
-        'No. Pesanan', 
-        'Nama Produk', 
+        'No. Pesanan',
+        'Nama Produk',
+        'Is_Settled',
         'Jumlah Bersih',
-        'Harga (@)', 
-        'Jumlah', 
+        'Harga (@)',
+        'Jumlah',
         'Returned quantity',
-        'Subtotal', 
-        'Biaya Administrasi', 
+        'Subtotal',
+        'Biaya Administrasi',
         COL_PCT_ADM,
-        'Biaya Gratis Ongkir XTRA', 
+        'Biaya Gratis Ongkir XTRA',
         COL_PCT_XTRA,
-        'Biaya Promo XTRA', 
+        'Biaya Promo XTRA',
         COL_PCT_PROMO,
-        'Subtotal Biaya', 
+        'Subtotal Biaya',
         COL_PCT_SUB_BIAYA,
-        'Biaya Proses Pesanan', 
-        'Total Biaya', 
+        'Biaya Proses Pesanan',
+        'Total Biaya',
         'Pajak'
     ]]
     
