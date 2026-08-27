@@ -110,6 +110,7 @@ def add_total_row(df):
         'Harga (@)',
         'Jumlah',
         'Returned quantity',
+        'Jumlah Bersih',
         'Subtotal',
         'Biaya Administrasi', 
         'Biaya Gratis Ongkir XTRA', 
@@ -154,6 +155,7 @@ def add_total_row(df):
         'Harga (@)': '',
         'Jumlah': '',
         'Returned quantity': '',
+        'Jumlah Bersih': '',
         'Subtotal': total_penghasilan,
         'Biaya Administrasi': '',
         COL_PCT_ADM: '',
@@ -205,9 +207,8 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Filter: Lihat berdasarkan == 'Sku'
     df_income = df_income[df_income['Lihat berdasarkan'] == 'Sku']
     
-    # Perhitungan Jumlah baru: Jumlah - Returned quantity
-    df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0)
-    df_order['Jumlah'] = df_order['Jumlah'] - df_order['Returned quantity']
+    # Pastikan Returned quantity terisi numerik (tanpa mengurangi Jumlah gross)
+    df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0).astype(int)
     
     # Simpan Nama Produk asli (tanpa variasi) untuk join
     df_order['Nama Produk Asli'] = df_order['Nama Produk']
@@ -307,7 +308,10 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result['Harga (@)'] = result['Harga Setelah Diskon'].round().astype(int)
     result.drop(columns=['Harga Setelah Diskon'], inplace=True, errors='ignore')
     
-    # Hitung Subtotal = Jumlah * Harga (@)
+    # Hitung Jumlah Bersih (Qty Real Terjual setelah retur) untuk keperluan akuntansi
+    result['Jumlah Bersih'] = result['Jumlah'] - result['Returned quantity']
+    
+    # Hitung Subtotal = Jumlah (Gross) * Harga (@)
     result['Subtotal'] = (result['Jumlah'] * result['Harga (@)']).round().astype(int)
     
     # Hitung Subtotal Biaya = Biaya Administrasi + Biaya Gratis Ongkir XTRA + Biaya Promo XTRA
@@ -317,6 +321,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         'Harga (@)',
         'Jumlah', 
         'Returned quantity',
+        'Jumlah Bersih',
         'Subtotal',
         'Biaya Administrasi', 
         'Biaya Gratis Ongkir XTRA', 
@@ -339,14 +344,13 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result[COL_PCT_SUB_BIAYA] = [abs(b) / sub * 100 if sub > 0 else 0.0 for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
     
     # Atur posisi kolom:
-    # No., No. Pesanan, Nama Produk, Harga (@), Jumlah, Returned quantity, Subtotal,
-    # Biaya Administrasi, (%), Biaya Gratis Ongkir XTRA, (%), Biaya Promo XTRA, (%), Subtotal Biaya, (%), Biaya Proses Pesanan, Total Biaya, Pajak
     result = result[[
         'No. Pesanan', 
         'Nama Produk', 
         'Harga (@)', 
         'Jumlah', 
         'Returned quantity',
+        'Jumlah Bersih',
         'Subtotal', 
         'Biaya Administrasi', 
         COL_PCT_ADM,
@@ -354,7 +358,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         COL_PCT_XTRA,
         'Biaya Promo XTRA', 
         COL_PCT_PROMO,
-        'Subtotal Biaya',
+        'Subtotal Biaya', 
         COL_PCT_SUB_BIAYA,
         'Biaya Proses Pesanan', 
         'Total Biaya', 
