@@ -112,8 +112,8 @@ if uploaded_order and uploaded_income:
         ]
         for col in thousand_cols:
             if col in display_df.columns:
-                # Format kosong agar Streamlit menggunakan lokalisasi angka bawaan (dengan pemisah ribuan)
-                cols_config[col] = st.column_config.NumberColumn(col)
+                # Memaksa pemisah ribuan menggunakan koma (,) di sisi UI
+                cols_config[col] = st.column_config.NumberColumn(col, format="%,d")
 
         st.dataframe(
             display_df, 
