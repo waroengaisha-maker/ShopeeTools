@@ -7,6 +7,23 @@ COL_PCT_XTRA = '(%) '
 COL_PCT_PROMO = '(%)  '
 COL_PCT_SUB_BIAYA = '(%)   '
 
+def get_order_date_bounds(order_file):
+    """Membaca file Order dan mengembalikan (min_date, max_date) dari kolom 'Waktu Pesanan Dibuat'.
+    
+    Returns:
+        tuple: (min_date, max_date) sebagai datetime.date, atau (None, None) jika gagal.
+    """
+    try:
+        df = pd.read_excel(order_file, sheet_name='orders', usecols=['Waktu Pesanan Dibuat'])
+        df['Waktu Pesanan Dibuat'] = pd.to_datetime(df['Waktu Pesanan Dibuat'], errors='coerce')
+        df = df.dropna(subset=['Waktu Pesanan Dibuat'])
+        if df.empty:
+            return None, None
+        return df['Waktu Pesanan Dibuat'].min().date(), df['Waktu Pesanan Dibuat'].max().date()
+    except Exception:
+        return None, None
+
+
 def format_thousands(val):
     """Format angka dengan pemisah ribuan koma (contoh: 1,234,567)."""
     if val == '' or pd.isna(val):
@@ -97,12 +114,20 @@ def add_total_row(df):
     summary_df = pd.DataFrame([total_row, total_penghasilan_row])
     return pd.concat([df, summary_df], ignore_index=True)
 
-def process_reconciliation(order_file, income_file, add_total=False):
+def process_reconciliation(order_file, income_file, start_date=None, end_date=None, add_total=False):
     # 1. Load Data (force Harga Setelah Diskon as string to preserve formatting like 8.500)
     df_order = pd.read_excel(order_file, sheet_name='orders', dtype={'Harga Setelah Diskon': str})
     df_income = pd.read_excel(income_file, sheet_name='Penghasilan', header=2)
 
     # 2. Pembersihan & Filter Data Order
+    # Filter berdasarkan rentang tanggal pesanan jika disediakan
+    if start_date and end_date:
+        df_order['Waktu Pesanan Dibuat_dt'] = pd.to_datetime(df_order['Waktu Pesanan Dibuat'], errors='coerce')
+        start_dt = pd.to_datetime(start_date).normalize()
+        end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        df_order = df_order[(df_order['Waktu Pesanan Dibuat_dt'] >= start_dt) & (df_order['Waktu Pesanan Dibuat_dt'] <= end_dt)]
+        df_order = df_order.drop(columns=['Waktu Pesanan Dibuat_dt'], errors='ignore')
+
     # Filter: Status Pesanan != 'Batal' AND No. Resi is not null
     df_order = df_order[df_order['Status Pesanan'] != 'Batal']
     df_order = df_order[df_order['No. Resi'].notna()]
@@ -198,6 +223,7 @@ def process_reconciliation(order_file, income_file, add_total=False):
         df_merged[col] = df_merged[col].fillna(0)
 
     # Penggabungan Nama Produk dan Nama Variasi untuk laporan final (setelah join sukses)
+    df_merged['Nama Produk'] = df_merged['Nama Produk'].fillna('')
     df_merged['Nama Variasi'] = df_merged['Nama Variasi'].fillna('')
     df_merged['Nama Produk Tampilan'] = df_merged.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
 
