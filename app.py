@@ -236,27 +236,29 @@ if uploaded_order and uploaded_income:
             filtered_result = filtered_result.drop(columns=['No.'])
         filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
 
-        # ─── Ringkasan Finansial (di luar tabel) ───
-        total_subtotal = int(filtered_result['Subtotal'].sum())
-        total_biaya = int(filtered_result['Total Biaya'].sum())
+        # ─── Ringkasan Finansial (HANYA dari pesanan yang SUDAH settlement) ───
+        settled_result = filtered_result[filtered_result['Is_Settled'] == True].copy() if 'Is_Settled' in filtered_result.columns else filtered_result.copy()
+
+        total_subtotal = int(settled_result['Subtotal'].sum())
+        total_biaya = int(settled_result['Total Biaya'].sum())
         
-        # Hitung rincian per komponen biaya
-        tot_adm = int(filtered_result['Biaya Administrasi'].sum()) if 'Biaya Administrasi' in filtered_result.columns else 0
-        tot_xtra = int(filtered_result['Biaya Gratis Ongkir XTRA'].sum()) if 'Biaya Gratis Ongkir XTRA' in filtered_result.columns else 0
-        tot_promo = int(filtered_result['Biaya Promo XTRA'].sum()) if 'Biaya Promo XTRA' in filtered_result.columns else 0
-        tot_sub_biaya = int(filtered_result['Subtotal Biaya'].sum()) if 'Subtotal Biaya' in filtered_result.columns else (tot_adm + tot_xtra + tot_promo)
-        tot_proses = int(filtered_result['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in filtered_result.columns else 0
-        tot_pajak = int(filtered_result['Pajak'].sum()) if 'Pajak' in filtered_result.columns else 0
+        # Hitung rincian per komponen biaya (hanya dari yang sudah settlement)
+        tot_adm = int(settled_result['Biaya Administrasi'].sum()) if 'Biaya Administrasi' in settled_result.columns else 0
+        tot_xtra = int(settled_result['Biaya Gratis Ongkir XTRA'].sum()) if 'Biaya Gratis Ongkir XTRA' in settled_result.columns else 0
+        tot_promo = int(settled_result['Biaya Promo XTRA'].sum()) if 'Biaya Promo XTRA' in settled_result.columns else 0
+        tot_sub_biaya = int(settled_result['Subtotal Biaya'].sum()) if 'Subtotal Biaya' in settled_result.columns else (tot_adm + tot_xtra + tot_promo)
+        tot_proses = int(settled_result['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in settled_result.columns else 0
+        tot_pajak = int(settled_result['Pajak'].sum()) if 'Pajak' in settled_result.columns else 0
 
         pct_adm = abs(tot_adm) / total_subtotal * 100 if total_subtotal > 0 else 0
         pct_xtra = abs(tot_xtra) / total_subtotal * 100 if total_subtotal > 0 else 0
         pct_promo = abs(tot_promo) / total_subtotal * 100 if total_subtotal > 0 else 0
         pct_sub_biaya = abs(tot_sub_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
 
-        # Hitung total penyesuaian — selalu filter berdasarkan No. Pesanan yang aktif di filtered_result
+        # Hitung total penyesuaian — selalu filter berdasarkan No. Pesanan yang aktif di settled_result
         adj_orders_list = []
         if not df_adj.empty:
-            active_orders = set(filtered_result['No. Pesanan'].astype(str).unique())
+            active_orders = set(settled_result['No. Pesanan'].astype(str).unique())
             relevant_adj = df_adj[df_adj['No. Pesanan'].astype(str).isin(active_orders)]
             total_penyesuaian = int(relevant_adj['Biaya Penyesuaian'].sum()) if not relevant_adj.empty else 0
             adj_orders_list = [o for o in relevant_adj['No. Pesanan'].unique().tolist() if o and str(o) != 'nan']
@@ -474,11 +476,11 @@ if uploaded_order and uploaded_income:
                 column_config=adj_cols_config
             )
 
-        # ─── Tabel Rekapitulasi Produk (Grouping) ───
+        # ─── Tabel Rekapitulasi Produk (Grouping - Khusus Pesanan yang SUDAH Settlement) ───
         df_product_summary = generate_product_summary(filtered_result)
         if not df_product_summary.empty:
-            with st.expander("📦 Rekapitulasi Penjualan Bersih per Produk", expanded=False):
-                st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dengan akumulasi Total Jumlah Bersih")
+            with st.expander("📦 Rekapitulasi Penjualan Bersih per Produk (Sudah Settlement)", expanded=False):
+                st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dari pesanan yang **sudah settlement** dengan akumulasi Total Jumlah Bersih")
                 prod_cols_config = {
                     'Total Jumlah Bersih': st.column_config.NumberColumn("Total Jumlah Bersih", format="%d"),
                     'Harga (@)': st.column_config.NumberColumn("Harga (@)", format="%,d"),

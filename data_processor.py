@@ -283,6 +283,9 @@ def generate_product_summary(df):
         clean_df = clean_df[~clean_df['No. Pesanan'].astype(str).isin(['Total', 'Total Penghasilan', ''])].copy()
     if 'Nama Produk' in clean_df.columns:
         clean_df = clean_df[~clean_df['Nama Produk'].astype(str).isin(['Total', 'Total Penghasilan'])].copy()
+    # HANYA masukkan pesanan yang SUDAH settlement (Is_Settled == True)
+    if 'Is_Settled' in clean_df.columns:
+        clean_df = clean_df[clean_df['Is_Settled'] == True].copy()
 
     if clean_df.empty:
         return pd.DataFrame()
