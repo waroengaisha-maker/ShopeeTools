@@ -190,18 +190,21 @@ if uploaded_order and uploaded_income:
         result = st.session_state.result
         df_adj = st.session_state.get('df_adjustments', pd.DataFrame())
         
-        # ─── Filter & Sorting ───
-        st.subheader("🔍 Filter & Pengurutan Data")
-        f_col1, f_col2, f_col3 = st.columns(3)
-        
-        # 1. Filter Data
+        # ─── Filter Data ───
+        st.subheader("🔍 Filter Data")
+        f_col1, f_col2 = st.columns(2)
         filter_options = st.session_state.get('filter_options', {})
+        
         with f_col1:
             allowed_filters = ['No. Pesanan', 'Nama Produk']
             available_filters = [col for col in allowed_filters if col in result.columns]
             if available_filters:
                 filter_col = st.selectbox("Filter berdasarkan:", available_filters)
-                # Gunakan opsi dari file order (mencerminkan semua pesanan valid sesuai date range)
+            else:
+                filter_col = None
+
+        with f_col2:
+            if filter_col:
                 unique_values = filter_options.get(filter_col, sorted(result[filter_col].dropna().astype(str).unique().tolist()))
                 selected_values = st.multiselect(f"Pilih nilai untuk {filter_col}:", unique_values, default=[])
                 if selected_values:
@@ -210,32 +213,8 @@ if uploaded_order and uploaded_income:
                     filtered_result = result.copy()
             else:
                 filtered_result = result.copy()
-        
-        # 2. Pilihan Kolom Pengurutan
-        with f_col2:
-            sortable_cols = [
-                'Nama Produk', 'Jumlah Bersih', 'Harga (@)', 'Jumlah', 'Returned quantity', 'Subtotal', 
-                'Biaya Administrasi', COL_PCT_ADM, 
-                'Biaya Gratis Ongkir XTRA', COL_PCT_XTRA, 
-                'Biaya Promo XTRA', COL_PCT_PROMO, 
-                'Subtotal Biaya', COL_PCT_SUB_BIAYA,
-                'Biaya Proses Pesanan', 'Total Biaya', 'Pajak', 'No. Pesanan'
-            ]
-            sortable_cols = [c for c in sortable_cols if c in filtered_result.columns]
-            sort_by = st.selectbox("Urutkan berdasarkan:", sortable_cols, index=0)
-            
-        # 3. Arah Pengurutan
-        with f_col3:
-            sort_dir = st.radio("Arah urutan:", ["Kecil ke Besar (Ascending)", "Besar ke Kecil (Descending)"], index=0)
-            ascending = True if "Ascending" in sort_dir else False
 
-        # Terapkan pengurutan — pastikan kolom numerik di-sort secara numerik dan teks tetap string
-        if pd.api.types.is_numeric_dtype(filtered_result[sort_by]):
-            filtered_result = filtered_result.sort_values(by=sort_by, ascending=ascending).reset_index(drop=True)
-        else:
-            filtered_result = filtered_result.sort_values(by=sort_by, ascending=ascending).reset_index(drop=True)
-
-        # Reset dan sisipkan kolom 'No.' agar selalu berurutan 1..N setelah sorting
+        # Reset dan sisipkan kolom 'No.' agar selalu berurutan 1..N
         if 'No.' in filtered_result.columns:
             filtered_result = filtered_result.drop(columns=['No.'])
         filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
