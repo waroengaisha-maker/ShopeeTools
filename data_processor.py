@@ -25,6 +25,15 @@ def add_total_row(df):
     if df.empty:
         return df
     
+    # Salin agar tidak mengubah data asli df
+    df = df.copy()
+    
+    # Format kolom persentase pada data produk ke string '%' khusus untuk visualisasi Excel
+    pct_cols = [COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA]
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: f"{x:.2f}%" if isinstance(x, (int, float)) else str(x))
+            
     numeric_cols = [
         'Harga (@)',
         'Jumlah',
@@ -239,10 +248,10 @@ def process_reconciliation(order_file, income_file, add_total=False):
     result = result.sort_values(by=['Nama Produk', 'Harga (@)'], ascending=[True, True]).reset_index(drop=True)
     
     # Hitung kolom persentase (%) untuk masing-masing baris produk
-    result[COL_PCT_ADM] = [f"{abs(adm) / sub * 100:.2f}%" if sub > 0 else "0.00%" for adm, sub in zip(result['Biaya Administrasi'], result['Subtotal'])]
-    result[COL_PCT_XTRA] = [f"{abs(xtra) / sub * 100:.2f}%" if sub > 0 else "0.00%" for xtra, sub in zip(result['Biaya Gratis Ongkir XTRA'], result['Subtotal'])]
-    result[COL_PCT_PROMO] = [f"{abs(promo) / sub * 100:.2f}%" if sub > 0 else "0.00%" for promo, sub in zip(result['Biaya Promo XTRA'], result['Subtotal'])]
-    result[COL_PCT_SUB_BIAYA] = [f"{abs(b) / sub * 100:.2f}%" if sub > 0 else "0.00%" for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
+    result[COL_PCT_ADM] = [abs(adm) / sub * 100 if sub > 0 else 0.0 for adm, sub in zip(result['Biaya Administrasi'], result['Subtotal'])]
+    result[COL_PCT_XTRA] = [abs(xtra) / sub * 100 if sub > 0 else 0.0 for xtra, sub in zip(result['Biaya Gratis Ongkir XTRA'], result['Subtotal'])]
+    result[COL_PCT_PROMO] = [abs(promo) / sub * 100 if sub > 0 else 0.0 for promo, sub in zip(result['Biaya Promo XTRA'], result['Subtotal'])]
+    result[COL_PCT_SUB_BIAYA] = [abs(b) / sub * 100 if sub > 0 else 0.0 for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
     
     # Atur posisi kolom:
     # No., No. Pesanan, Nama Produk, Harga (@), Jumlah, Subtotal,

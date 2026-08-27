@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from data_processor import process_reconciliation, add_total_row, format_thousands
+from data_processor import process_reconciliation, add_total_row, format_thousands, COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 import io
 
 st.set_page_config(layout="wide")
@@ -22,27 +22,47 @@ if uploaded_order and uploaded_income:
     if 'result' in st.session_state:
         result = st.session_state.result
         
-        # Fitur Filter
-        st.subheader("Filter Data")
-        allowed_filters = ['No. Pesanan', 'Nama Produk']
-        available_filters = [col for col in allowed_filters if col in result.columns]
+        # Fitur Filter & Pengurutan
+        st.subheader("Filter & Pengurutan Data")
+        f_col1, f_col2, f_col3 = st.columns(3)
         
-        if available_filters:
-            filter_col = st.selectbox("Pilih kolom untuk difilter:", available_filters)
-            
-            # Dapatkan nilai unik dari kolom yang dipilih
-            unique_values = result[filter_col].unique().tolist()
-            selected_values = st.multiselect(f"Pilih nilai untuk {filter_col}:", unique_values, default=[])
-            
-            # Terapkan filter: jika kosong, tampilkan semua data
-            if selected_values:
-                filtered_result = result[result[filter_col].isin(selected_values)].copy()
+        # 1. Filter Data
+        with f_col1:
+            allowed_filters = ['No. Pesanan', 'Nama Produk']
+            available_filters = [col for col in allowed_filters if col in result.columns]
+            if available_filters:
+                filter_col = st.selectbox("Filter berdasarkan:", available_filters)
+                unique_values = result[filter_col].unique().tolist()
+                selected_values = st.multiselect(f"Pilih nilai untuk {filter_col}:", unique_values, default=[])
+                if selected_values:
+                    filtered_result = result[result[filter_col].isin(selected_values)].copy()
+                else:
+                    filtered_result = result.copy()
             else:
                 filtered_result = result.copy()
-        else:
-            filtered_result = result.copy()
+        
+        # 2. Pilihan Kolom Pengurutan (di backend)
+        with f_col2:
+            sortable_cols = [
+                'Nama Produk', 'Harga (@)', 'Jumlah', 'Subtotal', 
+                'Biaya Administrasi', COL_PCT_ADM, 
+                'Biaya Gratis Ongkir XTRA', COL_PCT_XTRA, 
+                'Biaya Promo XTRA', COL_PCT_PROMO, 
+                'Subtotal Biaya', COL_PCT_SUB_BIAYA,
+                'Biaya Proses Pesanan', 'Total Biaya', 'Pajak', 'No. Pesanan'
+            ]
+            sortable_cols = [c for c in sortable_cols if c in filtered_result.columns]
+            sort_by = st.selectbox("Urutkan berdasarkan:", sortable_cols, index=0)
+            
+        # 3. Arah Pengurutan
+        with f_col3:
+            sort_dir = st.radio("Arah urutan:", ["Kecil ke Besar (Ascending)", "Besar ke Kecil (Descending)"], index=0)
+            ascending = True if "Ascending" in sort_dir else False
 
-        # Reset kolom No. agar berurutan kembali setelah filter
+        # Terapkan pengurutan di backend
+        filtered_result = filtered_result.sort_values(by=sort_by, ascending=ascending).reset_index(drop=True)
+
+        # Reset dan sisipkan kolom 'No.' secara fisik agar selalu berurutan dari 1 sampai N setelah disortir
         if 'No.' in filtered_result.columns:
             filtered_result = filtered_result.drop(columns=['No.'])
         filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
@@ -72,25 +92,35 @@ if uploaded_order and uploaded_income:
 
         st.subheader("Detail Data Produk")
 
-        # Format tampilan angka di tabel Streamlit dengan pemisah ribuan koma
+        # Tampilkan tabel menggunakan data numerik asli (tanpa format_thousands)
+        # agar sorting interaktif (klik header) maupun backend berjalan 100% secara numerik
         display_df = filtered_result.copy()
-        numeric_cols = [
-            'Harga (@)',
-            'Jumlah',
-            'Subtotal',
-            'Biaya Administrasi',
-            'Biaya Gratis Ongkir XTRA',
-            'Biaya Promo XTRA',
-            'Subtotal Biaya',
-            'Biaya Proses Pesanan',
-            'Total Biaya',
-            'Pajak'
-        ]
-        for col in numeric_cols:
-            if col in display_df.columns:
-                display_df[col] = display_df[col].apply(format_thousands)
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        # Konfigurasi kolom Streamlit agar menampilkan ribuan dan persentase secara rapi
+        cols_config = {
+            COL_PCT_ADM: st.column_config.NumberColumn("(%)", format="%.2f%%"),
+            COL_PCT_XTRA: st.column_config.NumberColumn("(%) ", format="%.2f%%"),
+            COL_PCT_PROMO: st.column_config.NumberColumn("(%)  ", format="%.2f%%"),
+            COL_PCT_SUB_BIAYA: st.column_config.NumberColumn("(%)   ", format="%.2f%%"),
+        }
+        
+        # Format ribuan untuk kolom uang/biaya dan jumlah
+        thousand_cols = [
+            'Harga (@)', 'Jumlah', 'Subtotal', 'Biaya Administrasi', 
+            'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Subtotal Biaya', 
+            'Biaya Proses Pesanan', 'Total Biaya', 'Pajak'
+        ]
+        for col in thousand_cols:
+            if col in display_df.columns:
+                # Format kosong agar Streamlit menggunakan lokalisasi angka bawaan (dengan pemisah ribuan)
+                cols_config[col] = st.column_config.NumberColumn(col)
+
+        st.dataframe(
+            display_df, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config=cols_config
+        )
         
         # Tambahkan baris total khusus untuk ekspor Excel saja
         final_result_excel = add_total_row(filtered_result)
