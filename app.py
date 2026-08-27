@@ -221,15 +221,16 @@ if uploaded_order and uploaded_income:
         pct_promo = abs(tot_promo) / total_subtotal * 100 if total_subtotal > 0 else 0
         pct_sub_biaya = abs(tot_sub_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
 
-        # Hitung total penyesuaian (berdasarkan filter pesanan yang aktif jika ada filter)
+        # Hitung total penyesuaian — selalu filter berdasarkan No. Pesanan yang aktif di filtered_result
         adj_orders_list = []
         if not df_adj.empty:
-            active_orders = set(filtered_result['No. Pesanan'].unique())
-            relevant_adj = df_adj[df_adj['No. Pesanan'].isin(active_orders)] if selected_values and filter_col == 'No. Pesanan' else df_adj
+            active_orders = set(filtered_result['No. Pesanan'].astype(str).unique())
+            relevant_adj = df_adj[df_adj['No. Pesanan'].astype(str).isin(active_orders)]
             total_penyesuaian = int(relevant_adj['Biaya Penyesuaian'].sum()) if not relevant_adj.empty else 0
-            adj_orders_list = [o for o in df_adj['No. Pesanan'].unique().tolist() if o and o != 'nan']
+            adj_orders_list = [o for o in relevant_adj['No. Pesanan'].unique().tolist() if o and str(o) != 'nan']
         else:
             total_penyesuaian = 0
+            relevant_adj = pd.DataFrame()
 
         # Total Penghasilan Bersih = Subtotal + Total Biaya + Total Penyesuaian (Total Biaya & Penyesuaian bernilai negatif)
         total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
@@ -352,14 +353,14 @@ if uploaded_order and uploaded_income:
         )
         
         # ─── Tabel Detail Penyesuaian (Adjustment) ───
-        if not df_adj.empty:
+        if not relevant_adj.empty:
             st.subheader("⚖️ Detail Penyesuaian (Adjustment)")
             st.caption("Penyesuaian saldo / pengembalian dana setelah dana dilepaskan berdasarkan No. Pesanan")
             adj_cols_config = {
                 'Biaya Penyesuaian': st.column_config.NumberColumn("Biaya Penyesuaian", format="%,d")
             }
             st.dataframe(
-                df_adj,
+                relevant_adj,
                 use_container_width=True,
                 hide_index=True,
                 column_config=adj_cols_config
@@ -371,8 +372,8 @@ if uploaded_order and uploaded_income:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             final_result_excel.to_excel(writer, sheet_name='Hasil Rekonsiliasi', index=False)
-            if not df_adj.empty:
-                df_adj.to_excel(writer, sheet_name='Penyesuaian (Adjustment)', index=False)
+            if not relevant_adj.empty:
+                relevant_adj.to_excel(writer, sheet_name='Penyesuaian (Adjustment)', index=False)
         
         st.download_button(
             label="📥 Unduh Laporan Excel Lengkap (.xlsx)",
