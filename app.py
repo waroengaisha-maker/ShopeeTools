@@ -58,6 +58,8 @@ html, body, [class*="css"] {
 .card-fees .value { color: #f87171; }
 .card-adj .value { color: #eab308; }
 .card-net .value { color: #4ade80; }
+.card-daily .value { color: #c084fc; }
+.card-daily .pct { font-size: 0.78rem; color: #a78bfa; margin-top: 0.2rem; }
 
 /* Fee breakdown pills */
 .breakdown-container {
@@ -151,6 +153,9 @@ if uploaded_order and uploaded_income:
             st.session_state.filter_options = get_order_filter_options(
                 uploaded_order, start_date=start_date, end_date=end_date
             )
+            # Simpan rentang tanggal yang diproses ke session_state
+            st.session_state.processed_start_date = start_date
+            st.session_state.processed_end_date = end_date
 
         # Reset date bounds cache saat proses ulang
         if 'date_bounds' in st.session_state:
@@ -242,30 +247,62 @@ if uploaded_order and uploaded_income:
         # Total Penghasilan Bersih = Subtotal + Total Biaya + Total Penyesuaian (Total Biaya & Penyesuaian bernilai negatif)
         total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
 
+        # Hitung rata-rata penghasilan per hari berdasarkan rentang tanggal yang diproses
+        proc_start = st.session_state.get('processed_start_date')
+        proc_end = st.session_state.get('processed_end_date')
+        if proc_start and proc_end:
+            from datetime import date as date_type
+            num_days = (proc_end - proc_start).days + 1
+        else:
+            num_days = None
+        avg_per_hari = total_penghasilan / num_days if num_days and num_days > 0 else None
+
         pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
 
         st.subheader("💰 Ringkasan Rekonsiliasi")
-        st.markdown(f"""
-        <div class="summary-container">
-            <div class="summary-card card-gross">
-                <div class="label">Total Subtotal (Gross)</div>
-                <div class="value">Rp {total_subtotal:,.0f}</div>
-            </div>
-            <div class="summary-card card-fees">
-                <div class="label">Total Biaya (Fees)</div>
-                <div class="value">Rp {total_biaya:,.0f}</div>
-                <div class="pct">{pct_biaya:.1f}% dari Subtotal</div>
-            </div>
-            <div class="summary-card card-adj">
-                <div class="label">Total Penyesuaian (Adjustment)</div>
-                <div class="value">Rp {total_penyesuaian:,.0f}</div>
-            </div>
-            <div class="summary-card card-net">
-                <div class="label">Total Penghasilan Bersih</div>
-                <div class="value">Rp {total_penghasilan:,.0f}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Label rentang hari
+        if num_days:
+            period_label = f"{proc_start.strftime('%d %b %Y')} – {proc_end.strftime('%d %b %Y')} ({num_days} hari)"
+        else:
+            period_label = ""
+        if period_label:
+            st.caption(f"📅 Periode: **{period_label}**")
+
+        avg_per_hari_fmt = f"Rp {avg_per_hari:,.0f}" if avg_per_hari is not None else ""
+        daily_card = ""
+        if avg_per_hari is not None:
+            daily_card = (
+                '<div class="summary-card card-daily">'
+                '<div class="label">Rata-rata Penghasilan / Hari</div>'
+                '<div class="value">' + avg_per_hari_fmt + '</div>'
+                '<div class="pct">' + str(num_days) + ' hari periode aktif</div>'
+                '</div>'
+            )
+
+        summary_html = (
+            '<div class="summary-container">'
+            '<div class="summary-card card-gross">'
+            '<div class="label">Total Subtotal (Gross)</div>'
+            f'<div class="value">Rp {total_subtotal:,.0f}</div>'
+            '</div>'
+            '<div class="summary-card card-fees">'
+            '<div class="label">Total Biaya (Fees)</div>'
+            f'<div class="value">Rp {total_biaya:,.0f}</div>'
+            f'<div class="pct">{pct_biaya:.1f}% dari Subtotal</div>'
+            '</div>'
+            '<div class="summary-card card-adj">'
+            '<div class="label">Total Penyesuaian (Adjustment)</div>'
+            f'<div class="value">Rp {total_penyesuaian:,.0f}</div>'
+            '</div>'
+            '<div class="summary-card card-net">'
+            '<div class="label">Total Penghasilan Bersih</div>'
+            f'<div class="value">Rp {total_penghasilan:,.0f}</div>'
+            '</div>'
+            + daily_card +
+            '</div>'
+        )
+        st.markdown(summary_html, unsafe_allow_html=True)
+
 
         # ─── Rincian Komponen Biaya ───
         with st.expander("📊 Rincian Detail Komponen Biaya", expanded=True):
