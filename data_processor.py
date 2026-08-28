@@ -313,9 +313,25 @@ def generate_product_summary(df, hpp_lookup=None):
 
     # Tambahkan kalkulasi HPP jika hpp_lookup disediakan
     if hpp_lookup is not None:
-        def get_hpp_unit(p_name):
-            return int(round(hpp_lookup.get(p_name, {}).get('HargaPokok', 0)))
+        def get_item_hpp(row):
+            p_name = row['Nama Produk']
+            qty = row['Total Jumlah Bersih']
+            info = hpp_lookup.get(p_name, {})
+            harga = info.get('HargaPokok', 0)
+            konv = info.get('Konversi', 1) or 1
+            unit_hpp = harga / konv
+            return int(round(qty * unit_hpp))
 
+        def get_hpp_unit(p_name):
+            info = hpp_lookup.get(p_name, {})
+            harga = info.get('HargaPokok', 0)
+            konv = info.get('Konversi', 1) or 1
+            return int(round(harga / konv))
+
+        def get_satuan_unit(p_name):
+            return str(hpp_lookup.get(p_name, {}).get('Satuan', '-'))
+
+        grouped['Satuan'] = grouped['Nama Produk'].apply(get_satuan_unit)
         grouped['HPP (@)'] = grouped['Nama Produk'].apply(get_hpp_unit)
         grouped['Total HPP'] = (grouped['Total Jumlah Bersih'] * grouped['HPP (@)']).astype(int)
         
@@ -327,7 +343,7 @@ def generate_product_summary(df, hpp_lookup=None):
         )
         
         grouped = grouped[[
-            'Nama Produk', 'Total Jumlah Bersih', 'Harga (@)', 'Total Penjualan Bersih',
+            'Nama Produk', 'Total Jumlah Bersih', 'Satuan', 'Harga (@)', 'Total Penjualan Bersih',
             'HPP (@)', 'Total HPP', 'Laba Bersih', 'Margin Laba (%)'
         ]]
     else:
@@ -352,6 +368,7 @@ def generate_product_summary(df, hpp_lookup=None):
         tot_hpp = int(grouped['Total HPP'].sum())
         tot_laba = int(grouped['Laba Bersih'].sum())
         tot_margin = (tot_laba / tot_sales * 100) if tot_sales > 0 else 0.0
+        row_total['Satuan'] = ''
         row_total['HPP (@)'] = ''
         row_total['Total HPP'] = tot_hpp
         row_total['Laba Bersih'] = tot_laba

@@ -298,7 +298,7 @@ if uploaded_order and uploaded_income:
         # Total Keseluruhan (Settled Real + Estimasi Unsettled per Produk)
         total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
 
-        # ─── Perhitungan HPP & Laba Bersih Toko (Berdasarkan Mapping HPP Opsi B) ───
+        # ─── Perhitungan HPP & Laba Bersih Toko (Berdasarkan Mapping HPP Opsi B Multi-Satuan) ───
         hpp_source = uploaded_hpp if uploaded_hpp is not None else None
         if hpp_source is not None:
             hpp_source.seek(0)
@@ -306,19 +306,21 @@ if uploaded_order and uploaded_income:
         all_unique_prods = result['Nama Produk'].dropna().unique().tolist()
         mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
         
-        # Buat dictionary lookup harga pokok per Nama Produk Shopee
-        hpp_by_code = {r['KodeItem']: r.to_dict() for _, r in df_hpp_master.iterrows()}
+        # Buat dictionary lookup harga pokok per ItemKey (KodeItem_Satuan)
+        hpp_by_key = {r['ItemKey']: r.to_dict() for _, r in df_hpp_master.iterrows()}
         hpp_lookup = {}
-        for p_name, k_code in mapping_dict.items():
-            if k_code in hpp_by_code:
-                hpp_lookup[p_name] = hpp_by_code[k_code]
+        for p_name, item_key in mapping_dict.items():
+            if item_key in hpp_by_key:
+                hpp_lookup[p_name] = hpp_by_key[item_key]
 
         # Hitung Total HPP dari pesanan settled
         def get_item_hpp(row):
             p_name = row['Nama Produk']
             qty = row['Jumlah Bersih']
-            unit_hpp = hpp_lookup.get(p_name, {}).get('HargaPokok', 0)
-            return qty * unit_hpp
+            info = hpp_lookup.get(p_name, {})
+            harga = info.get('HargaPokok', 0)
+            konv = info.get('Konversi', 1) or 1
+            return qty * (harga / konv)
 
         if not settled_result.empty and hpp_lookup:
             total_hpp_settled = int(round(settled_result.apply(get_item_hpp, axis=1).sum()))
@@ -624,27 +626,37 @@ if uploaded_order and uploaded_income:
                     column_config=prod_cols_config
                 )
 
-        # ─── Panel Pengaturan Pemetaan HPP (Opsi B: Kamus Mapping) ───
+        # ─── Panel Pengaturan Pemetaan HPP (Opsi B: Kamus Mapping Multi-Satuan) ───
         hpp_source_name = uploaded_hpp.name if uploaded_hpp is not None else "files/hpp_produk.xlsx (Default)"
-        with st.expander("🛠️ Pengaturan Pemetaan Master HPP Produk (Kamus Relasi)", expanded=False):
-            st.caption(f"📁 Sumber Master HPP aktif: **{hpp_source_name}** ({len(df_hpp_master)} item produk)")
-            st.write("Sesuaikan relasi nama produk Shopee dengan Item di file Master HPP. Pilihan relasi KodeItem tersimpan permanen.")
+        with st.expander("🛠️ Pengaturan Pemetaan Master HPP Produk (Kamus Relasi Satuan)", expanded=False):
+            st.caption(f"📁 Sumber Master HPP aktif: **{hpp_source_name}** ({len(df_hpp_master)} varian satuan item)")
+            st.write("Sesuaikan relasi nama produk Shopee dengan Item & Satuan di file Master HPP (misal: PCS, DUS, PAK, RTG). Pilihan tersimpan permanen.")
             
-            hpp_options = ["(Belum Dipetakan)"] + [f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()]
-            code_to_option = {r['KodeItem']: f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()}
-            option_to_code = {f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})": r['KodeItem'] for _, r in df_hpp_master.iterrows()}
+            # Format pilihan: [ItemKey] KodeItem - NamaItem [Satuan | Konversi X] (HPP: Rp Y)
+            hpp_options = ["(Belum Dipetakan)"] + [
+                f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})"
+                for _, r in df_hpp_master.iterrows()
+            ]
+            key_to_option = {
+                r['ItemKey']: f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})"
+                for _, r in df_hpp_master.iterrows()
+            }
+            option_to_key = {
+                f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})": r['ItemKey']
+                for _, r in df_hpp_master.iterrows()
+            }
             
             m_col1, m_col2 = st.columns([3, 1])
             with m_col1:
                 selected_shopee_prod = st.selectbox("Pilih Produk Shopee untuk Diatur:", sorted(all_unique_prods))
             
-            current_code = mapping_dict.get(selected_shopee_prod, '')
+            current_key = mapping_dict.get(selected_shopee_prod, '')
             current_idx = 0
-            if current_code in code_to_option:
-                current_idx = hpp_options.index(code_to_option[current_code])
+            if current_key in key_to_option:
+                current_idx = hpp_options.index(key_to_option[current_key])
             
             with m_col1:
-                selected_hpp_opt = st.selectbox("Petakan ke Master Item HPP:", hpp_options, index=current_idx)
+                selected_hpp_opt = st.selectbox("Petakan ke Master Item & Satuan HPP:", hpp_options, index=current_idx)
             
             with m_col2:
                 st.write("")
@@ -653,8 +665,8 @@ if uploaded_order and uploaded_income:
                     if selected_hpp_opt == "(Belum Dipetakan)":
                         mapping_dict.pop(selected_shopee_prod, None)
                     else:
-                        new_code = option_to_code[selected_hpp_opt]
-                        mapping_dict[selected_shopee_prod] = new_code
+                        new_key = option_to_key[selected_hpp_opt]
+                        mapping_dict[selected_shopee_prod] = new_key
                     save_mapping(mapping_dict)
                     st.success("✅ Pemetaan tersimpan!")
                     st.rerun()
