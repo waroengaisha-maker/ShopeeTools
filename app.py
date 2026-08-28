@@ -644,14 +644,22 @@ if uploaded_order and uploaded_income:
             }
             label_to_key = {v: k for k, v in key_to_label.items()}
 
+            # Build lookup: ItemKey -> HPP per unit (after konversi)
+            key_to_hpp = {
+                r['ItemKey']: round(r['HargaPokok'] / (r['Konversi'] or 1))
+                for _, r in df_hpp_master.iterrows()
+            }
+
             # Bangun DataFrame untuk tabel editor
             table_rows = []
             for prod in sorted(all_unique_prods):
                 cur_key = mapping_dict.get(prod, '')
                 cur_label = key_to_label.get(cur_key, BELUM_DIPETAKAN)
+                hpp_val = key_to_hpp.get(cur_key, None) if cur_key else None
                 table_rows.append({
                     'Nama Produk (Shopee)': prod,
                     'Pemetaan HPP (ItemKey & Satuan)': cur_label,
+                    'HPP (@)': hpp_val,
                 })
             mapping_df = pd.DataFrame(table_rows)
 
@@ -666,6 +674,13 @@ if uploaded_order and uploaded_income:
                         options=hpp_options_list,
                         required=True,
                         width="large",
+                    ),
+                    'HPP (@)': st.column_config.NumberColumn(
+                        "HPP/Unit (Rp)",
+                        format="%,d",
+                        disabled=True,
+                        width="small",
+                        help="HPP per unit terjual di Shopee (setelah konversi satuan). Kosong = belum dipetakan."
                     ),
                 },
                 use_container_width=True,
