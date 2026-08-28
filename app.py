@@ -134,11 +134,17 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Aplikasi Rekonsiliasi Shopee")
-st.write("Unggah laporan **Order** dan laporan **Penghasilan** untuk mendapatkan ringkasan SKU.")
+u_col1, u_col2 = st.columns(2)
+with u_col1:
+    uploaded_order = st.file_uploader("1. Pilih Laporan Order (Excel) *", type=['xlsx'])
+with u_col2:
+    uploaded_income = st.file_uploader("2. Pilih Laporan Penghasilan (Excel) *", type=['xlsx'])
 
-uploaded_order = st.file_uploader("Pilih Laporan Order (Excel)", type=['xlsx'])
-uploaded_income = st.file_uploader("Pilih Laporan Penghasilan (Excel)", type=['xlsx'])
+uploaded_hpp = st.file_uploader(
+    "3. Pilih Laporan Master HPP Rata-rata Periode Terkait (Opsional - default: files/hpp_produk.xlsx)", 
+    type=['xlsx'],
+    help="Unggah file HPP jika ingin menggunakan harga pokok rata-rata spesifik periode ini. Jika kosong, sistem otomatis memakai master HPP default."
+)
 
 if uploaded_order and uploaded_income:
     # ─── Date range picker ───
@@ -293,7 +299,10 @@ if uploaded_order and uploaded_income:
         total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
 
         # ─── Perhitungan HPP & Laba Bersih Toko (Berdasarkan Mapping HPP Opsi B) ───
-        df_hpp_master = load_hpp_master()
+        hpp_source = uploaded_hpp if uploaded_hpp is not None else None
+        if hpp_source is not None:
+            hpp_source.seek(0)
+        df_hpp_master = load_hpp_master(file_source=hpp_source)
         all_unique_prods = result['Nama Produk'].dropna().unique().tolist()
         mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
         
@@ -616,8 +625,10 @@ if uploaded_order and uploaded_income:
                 )
 
         # ─── Panel Pengaturan Pemetaan HPP (Opsi B: Kamus Mapping) ───
+        hpp_source_name = uploaded_hpp.name if uploaded_hpp is not None else "files/hpp_produk.xlsx (Default)"
         with st.expander("🛠️ Pengaturan Pemetaan Master HPP Produk (Kamus Relasi)", expanded=False):
-            st.write("Sesuaikan relasi nama produk Shopee dengan Item di file Master HPP (`hpp_produk.xlsx`). Pilihan tersimpan otomatis.")
+            st.caption(f"📁 Sumber Master HPP aktif: **{hpp_source_name}** ({len(df_hpp_master)} item produk)")
+            st.write("Sesuaikan relasi nama produk Shopee dengan Item di file Master HPP. Pilihan relasi KodeItem tersimpan permanen.")
             
             hpp_options = ["(Belum Dipetakan)"] + [f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()]
             code_to_option = {r['KodeItem']: f"{r['KodeItem']} - {r['NamaItem']} (HPP: Rp {r['HargaPokok']:,.0f})" for _, r in df_hpp_master.iterrows()}
