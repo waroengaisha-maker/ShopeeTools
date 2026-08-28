@@ -650,6 +650,9 @@ if uploaded_order and uploaded_income:
                 for _, r in df_hpp_master.iterrows()
             }
 
+            # Simpan juga original HPP untuk deteksi perubahan
+            original_hpp = {prod: key_to_hpp.get(mapping_dict.get(prod, ''), None) for prod in all_unique_prods}
+
             # Bangun DataFrame untuk tabel editor
             table_rows = []
             for prod in sorted(all_unique_prods):
@@ -676,11 +679,12 @@ if uploaded_order and uploaded_income:
                         width="large",
                     ),
                     'HPP (@)': st.column_config.NumberColumn(
-                        "HPP/Unit (Rp)",
+                        "HPP/Unit (Rp) ✏️",
                         format="%,d",
-                        disabled=True,
+                        min_value=0,
+                        step=1,
                         width="small",
-                        help="HPP per unit terjual di Shopee (setelah konversi satuan). Kosong = belum dipetakan."
+                        help="HPP per unit terjual (setelah konversi). Edit langsung untuk update master HPP.",
                     ),
                 },
                 use_container_width=True,
@@ -690,25 +694,70 @@ if uploaded_order and uploaded_income:
             )
 
             if st.button("💾 Simpan Semua Perubahan", key="btn_save_bulk_mapping", type="primary"):
-                changed = 0
+                mapping_changed = 0
+                hpp_changed = 0
+
+                # ── Deteksi perubahan HPP & tulis balik ke Excel ──
+                # Load fresh df untuk diedit
+                hpp_excel_path = "files/hpp_produk.xlsx"
+                df_hpp_edit = pd.read_excel(hpp_excel_path)
+                df_hpp_edit['ItemKey'] = df_hpp_edit['KodeItem'].astype(str) + '_' + df_hpp_edit['Satuan'].astype(str)
+
                 for _, row in edited_df.iterrows():
                     prod_name = row['Nama Produk (Shopee)']
                     chosen_label = row['Pemetaan HPP (ItemKey & Satuan)']
+                    new_hpp_unit = row['HPP (@)']
+
+                    # Tentukan ItemKey yang aktif setelah mapping (bisa baru atau lama)
+                    if chosen_label == BELUM_DIPETAKAN:
+                        active_key = ''
+                    else:
+                        active_key = label_to_key.get(chosen_label, mapping_dict.get(prod_name, ''))
+
+                    # Update mapping jika berubah
                     if chosen_label == BELUM_DIPETAKAN:
                         if prod_name in mapping_dict:
                             del mapping_dict[prod_name]
-                            changed += 1
+                            mapping_changed += 1
                     else:
-                        new_key = label_to_key.get(chosen_label, '')
-                        if new_key and mapping_dict.get(prod_name) != new_key:
-                            mapping_dict[prod_name] = new_key
-                            changed += 1
+                        if active_key and mapping_dict.get(prod_name) != active_key:
+                            mapping_dict[prod_name] = active_key
+                            mapping_changed += 1
+
+                    # Update HPP di Excel jika berubah dan valid
+                    if active_key and pd.notna(new_hpp_unit):
+                        new_hpp_unit = int(round(new_hpp_unit))
+                        old_hpp_unit = key_to_hpp.get(active_key)
+                        if old_hpp_unit is None or new_hpp_unit != int(round(old_hpp_unit)):
+                            # HargaPokok di master = HPP/unit * Konversi
+                            mask = df_hpp_edit['ItemKey'] == active_key
+                            if mask.any():
+                                konv = df_hpp_edit.loc[mask, 'Konversi'].iloc[0] or 1
+                                new_harga_pokok = round(new_hpp_unit * konv, 2)
+                                df_hpp_edit.loc[mask, 'HargaPokok'] = new_harga_pokok
+                                hpp_changed += 1
+
+                # Simpan mapping
                 save_mapping(mapping_dict)
-                if changed > 0:
-                    st.success(f"✅ {changed} perubahan berhasil disimpan!")
+
+                # Simpan Excel jika ada perubahan HPP
+                if hpp_changed > 0:
+                    df_hpp_edit.drop(columns=['ItemKey'], inplace=True)
+                    df_hpp_edit.to_excel(hpp_excel_path, index=False)
+
+                total_changed = mapping_changed + hpp_changed
+                if total_changed > 0:
+                    msgs = []
+                    if mapping_changed:
+                        msgs.append(f"{mapping_changed} pemetaan")
+                    if hpp_changed:
+                        msgs.append(f"{hpp_changed} HPP di master Excel")
+                    st.success(f"✅ Tersimpan: {' dan '.join(msgs)}!")
                     st.rerun()
                 else:
                     st.info("Tidak ada perubahan yang perlu disimpan.")
+
+
 
 
 
