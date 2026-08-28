@@ -626,50 +626,76 @@ if uploaded_order and uploaded_income:
                     column_config=prod_cols_config
                 )
 
-        # ─── Panel Pengaturan Pemetaan HPP (Opsi B: Kamus Mapping Multi-Satuan) ───
+        # ─── Panel Pengaturan Pemetaan HPP (Tabel Bulk Edit) ───
         hpp_source_name = uploaded_hpp.name if uploaded_hpp is not None else "files/hpp_produk.xlsx (Default)"
         with st.expander("🛠️ Pengaturan Pemetaan Master HPP Produk (Kamus Relasi Satuan)", expanded=False):
             st.caption(f"📁 Sumber Master HPP aktif: **{hpp_source_name}** ({len(df_hpp_master)} varian satuan item)")
-            st.write("Sesuaikan relasi nama produk Shopee dengan Item & Satuan di file Master HPP (misal: PCS, DUS, PAK, RTG). Pilihan tersimpan permanen.")
-            
-            # Format pilihan: [ItemKey] KodeItem - NamaItem [Satuan | Konversi X] (HPP: Rp Y)
-            hpp_options = ["(Belum Dipetakan)"] + [
+            st.write("Edit pemetaan langsung di tabel — pilih satuan HPP yang sesuai untuk setiap produk Shopee, lalu klik **Simpan Semua Perubahan**.")
+
+            # Opsi dropdown: label tampil, value = ItemKey
+            BELUM_DIPETAKAN = "(Belum Dipetakan)"
+            hpp_options_list = [BELUM_DIPETAKAN] + [
                 f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})"
                 for _, r in df_hpp_master.iterrows()
             ]
-            key_to_option = {
+            key_to_label = {
                 r['ItemKey']: f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})"
                 for _, r in df_hpp_master.iterrows()
             }
-            option_to_key = {
-                f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})": r['ItemKey']
-                for _, r in df_hpp_master.iterrows()
-            }
-            
-            m_col1, m_col2 = st.columns([3, 1])
-            with m_col1:
-                selected_shopee_prod = st.selectbox("Pilih Produk Shopee untuk Diatur:", sorted(all_unique_prods))
-            
-            current_key = mapping_dict.get(selected_shopee_prod, '')
-            current_idx = 0
-            if current_key in key_to_option:
-                current_idx = hpp_options.index(key_to_option[current_key])
-            
-            with m_col1:
-                selected_hpp_opt = st.selectbox("Petakan ke Master Item & Satuan HPP:", hpp_options, index=current_idx)
-            
-            with m_col2:
-                st.write("")
-                st.write("")
-                if st.button("💾 Simpan Pemetaan", key="btn_save_mapping"):
-                    if selected_hpp_opt == "(Belum Dipetakan)":
-                        mapping_dict.pop(selected_shopee_prod, None)
+            label_to_key = {v: k for k, v in key_to_label.items()}
+
+            # Bangun DataFrame untuk tabel editor
+            table_rows = []
+            for prod in sorted(all_unique_prods):
+                cur_key = mapping_dict.get(prod, '')
+                cur_label = key_to_label.get(cur_key, BELUM_DIPETAKAN)
+                table_rows.append({
+                    'Nama Produk (Shopee)': prod,
+                    'Pemetaan HPP (ItemKey & Satuan)': cur_label,
+                })
+            mapping_df = pd.DataFrame(table_rows)
+
+            edited_df = st.data_editor(
+                mapping_df,
+                column_config={
+                    'Nama Produk (Shopee)': st.column_config.TextColumn(
+                        "Nama Produk (Shopee)", disabled=True, width="large"
+                    ),
+                    'Pemetaan HPP (ItemKey & Satuan)': st.column_config.SelectboxColumn(
+                        "Pemetaan HPP (Item, Satuan, HPP)",
+                        options=hpp_options_list,
+                        required=True,
+                        width="large",
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                key="bulk_mapping_editor",
+            )
+
+            if st.button("💾 Simpan Semua Perubahan", key="btn_save_bulk_mapping", type="primary"):
+                changed = 0
+                for _, row in edited_df.iterrows():
+                    prod_name = row['Nama Produk (Shopee)']
+                    chosen_label = row['Pemetaan HPP (ItemKey & Satuan)']
+                    if chosen_label == BELUM_DIPETAKAN:
+                        if prod_name in mapping_dict:
+                            del mapping_dict[prod_name]
+                            changed += 1
                     else:
-                        new_key = option_to_key[selected_hpp_opt]
-                        mapping_dict[selected_shopee_prod] = new_key
-                    save_mapping(mapping_dict)
-                    st.success("✅ Pemetaan tersimpan!")
+                        new_key = label_to_key.get(chosen_label, '')
+                        if new_key and mapping_dict.get(prod_name) != new_key:
+                            mapping_dict[prod_name] = new_key
+                            changed += 1
+                save_mapping(mapping_dict)
+                if changed > 0:
+                    st.success(f"✅ {changed} perubahan berhasil disimpan!")
                     st.rerun()
+                else:
+                    st.info("Tidak ada perubahan yang perlu disimpan.")
+
+
 
         # ─── Export Excel (raw integer, tanpa formatting) ───
         final_result_excel = add_total_row(filtered_result)
