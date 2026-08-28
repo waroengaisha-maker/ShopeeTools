@@ -326,10 +326,17 @@ if uploaded_order and uploaded_income:
             total_hpp_settled = int(round(settled_result.apply(get_item_hpp, axis=1).sum()))
             laba_bersih_settled = total_penghasilan - total_hpp_settled
             margin_laba_settled = (laba_bersih_settled / total_subtotal * 100) if total_subtotal > 0 else 0.0
+
+            # Estimasi HPP untuk pesanan pending (gunakan rasio HPP/subtotal dari settled)
+            hpp_ratio = total_hpp_settled / total_subtotal if total_subtotal > 0 else 0.0
+            est_hpp_unsettled = int(round(unsettled_subtotal * hpp_ratio)) if unsettled_subtotal > 0 else 0
+            total_hpp_proyeksi = total_hpp_settled + est_hpp_unsettled
         else:
             total_hpp_settled = 0
             laba_bersih_settled = total_penghasilan
             margin_laba_settled = 0.0
+            total_hpp_proyeksi = 0
+            est_hpp_unsettled = 0
 
         # Hitung rata-rata penghasilan per hari berdasarkan rentang tanggal yang diproses
         proc_start = st.session_state.get('processed_start_date')
@@ -425,6 +432,18 @@ if uploaded_order and uploaded_income:
                 '<div class="pct">Settled + Estimasi Pending</div>'
                 '</div>'
             )
+        laba_proyeksi_card = ""
+        if not unsettled_result.empty and total_hpp_proyeksi > 0:
+            laba_proyeksi = total_proyeksi_keseluruhan - total_hpp_proyeksi
+            margin_proyeksi = (laba_proyeksi / total_proyeksi_keseluruhan * 100) if total_proyeksi_keseluruhan > 0 else 0.0
+            laba_proj_color = "#10b981" if laba_proyeksi >= 0 else "#f87171"
+            laba_proyeksi_card = (
+                '<div class="summary-card card-laba">'
+                '<div class="label">Proyeksi Laba Bersih</div>'
+                f'<div class="value" style="color: {laba_proj_color};">Rp {laba_proyeksi:,.0f}</div>'
+                f'<div class="pct">Margin Proyeksi: {margin_proyeksi:.1f}% | Est. HPP Pending: Rp {est_hpp_unsettled:,.0f}</div>'
+                '</div>'
+            )
 
         daily_card = ""
         daily_proj_card = ""
@@ -464,6 +483,7 @@ if uploaded_order and uploaded_income:
             + laba_card
             + potential_card
             + grand_total_card
+            + laba_proyeksi_card
             + daily_card
             + daily_proj_card
             + settle_card
