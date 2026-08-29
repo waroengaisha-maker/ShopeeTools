@@ -721,26 +721,29 @@ elif menu == "📦 Kelola Master HPP":
             table_rows = []
             needs_confirm_count = 0
             for prod in all_prods_list:
-                cur_key = mapping_dict.get(prod, '')
+                # Source of Truth Akuntansi: Hanya mapping yang SUDAH dikonfirmasi (tercatat di mapping_dict)
+                confirmed_key = mapping_dict.get(prod, '')
                 
-                # Cek confidence suggestion jika belum dimapping
-                if not cur_key:
+                if confirmed_key:
+                    cur_label = key_to_label.get(confirmed_key, BELUM_DIPETAKAN)
+                    match_status = "✅ Terpetakan"
+                    # HPP dihitung HANYA dari confirmed_key
+                    hpp_val = key_to_hpp.get(confirmed_key, None)
+                else:
+                    # Belum ada mapping terkonfirmasi: Cek apakah ada saran fuzzy matching
                     sugg_key, sugg_score, _ = get_suggestion_with_confidence(prod, df_hpp_master)
                     if sugg_score >= 0.70 and sugg_key:
-                        # 70-89% (Needs confirmation): Tampilkan suggestion sebagai default pilihan agar user tinggal review & simpan
-                        cur_key = sugg_key
+                        # 70-89%: Pasang suggestion di dropdown agar siap di-review user, TAPI HPP tetap None (tidak masuk akuntansi sebelum disimpan)
                         cur_label = key_to_label.get(sugg_key, BELUM_DIPETAKAN)
                         match_status = f"🔍 Rekomendasi ({int(sugg_score*100)}%)"
                         needs_confirm_count += 1
+                        hpp_val = None
                     else:
                         # < 70%: Unmapped
                         cur_label = BELUM_DIPETAKAN
                         match_status = "❌ Belum Terpetakan"
-                else:
-                    cur_label = key_to_label.get(cur_key, BELUM_DIPETAKAN)
-                    match_status = "✅ Terpetakan"
+                        hpp_val = None
 
-                hpp_val = key_to_hpp.get(cur_key, None) if cur_key else None
                 table_rows.append({
                     'Status': match_status,
                     'Nama Produk (Shopee)': prod,
@@ -750,7 +753,7 @@ elif menu == "📦 Kelola Master HPP":
             mapping_df = pd.DataFrame(table_rows)
 
             # Highlight info bar
-            unmapped_count = sum(1 for r in table_rows if r['Pemetaan HPP (ItemKey & Satuan)'] == BELUM_DIPETAKAN)
+            unmapped_count = sum(1 for r in table_rows if r['Status'] == "❌ Belum Terpetakan")
             zero_hpp_count = sum(1 for r in table_rows if r['HPP (@)'] == 0 or r['HPP (@)'] is None)
 
             m_c1, m_c2, m_c3, m_c4 = st.columns(4)
