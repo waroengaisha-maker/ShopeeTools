@@ -591,9 +591,10 @@ if menu == "📊 Rekonsiliasi Shopee":
                 COL_PCT_XTRA: st.column_config.NumberColumn("(%) ", format="%.2f%%"),
                 COL_PCT_PROMO: st.column_config.NumberColumn("(%)  ", format="%.2f%%"),
                 COL_PCT_SUB_BIAYA: st.column_config.NumberColumn("(%)   ", format="%.2f%%"),
-                'Jumlah': st.column_config.NumberColumn("Jumlah (Gross)", format="%d", help="Jumlah unit yang dipesan pembeli (Gross)"),
-                'Returned quantity': st.column_config.NumberColumn("Retur (Qty)", format="%d", help="Jumlah unit yang diretur"),
-                'Jumlah Bersih': st.column_config.NumberColumn("Jumlah Bersih", format="%d", help="Jumlah unit real terjual (Jumlah - Retur)"),
+                'Jumlah': st.column_config.NumberColumn("Jumlah (Gross)", format="%d", help="Jumlah unit yang dipesan pembeli awal"),
+                'Returned quantity': st.column_config.NumberColumn("Retur (Qty)", format="%d", help="Jumlah unit yang diretur pembeli"),
+                'Jumlah Bersih': st.column_config.NumberColumn("Jumlah Bersih (Unit)", format="%d", help="Kuantitas fisik real terjual (Jumlah - Retur). Dipakai untuk dasar modal HPP."),
+                'Subtotal': st.column_config.NumberColumn("Subtotal (Gross Sales)", format="%,d", help="Nilai transaksi kotor awal (Jumlah × Harga). Potongan pengembalian dana retur dicatat pada tabel Penyesuaian (Adjustment)."),
             }
             
             thousand_cols = [
@@ -602,7 +603,7 @@ if menu == "📊 Rekonsiliasi Shopee":
                 'Biaya Proses Pesanan', 'Total Biaya', 'Pajak'
             ]
             for col in thousand_cols:
-                if col in display_df.columns and col not in ['Jumlah', 'Returned quantity', 'Jumlah Bersih']:
+                if col in display_df.columns and col not in ['Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal']:
                     cols_config[col] = st.column_config.NumberColumn(col, format="%,d")
 
             st.dataframe(
@@ -630,14 +631,14 @@ if menu == "📊 Rekonsiliasi Shopee":
             df_product_summary = generate_product_summary(filtered_result, hpp_lookup=hpp_lookup)
             if not df_product_summary.empty:
                 with st.expander("📦 Rekapitulasi Penjualan & Margin Laba per Produk (Sudah Settlement)", expanded=True):
-                    st.caption("Grouping berdasarkan Nama Produk dan Harga (@) dilengkapi kalkulasi Modal (HPP), Laba Bersih, dan Margin (%)")
+                    st.caption("Grouping berdasarkan Nama Produk dan Harga (@). **Total Penjualan (Gross Sales)** diambil dari akumulasi Subtotal riil transaksi, sedangkan **Total HPP** dihitung dari Kuantitas Bersih fisik.")
                     prod_cols_config = {
-                        'Total Jumlah Bersih': st.column_config.NumberColumn("Total Jumlah Bersih", format="%d"),
-                        'Harga (@)': st.column_config.NumberColumn("Harga (@)", format="%,d"),
-                        'Total Penjualan Bersih': st.column_config.NumberColumn("Total Penjualan Bersih", format="%,d"),
-                        'HPP (@)': st.column_config.NumberColumn("HPP (@)", format="%,d"),
-                        'Total HPP': st.column_config.NumberColumn("Total HPP", format="%,d"),
-                        'Laba Bersih': st.column_config.NumberColumn("Laba Bersih", format="%,d"),
+                        'Total Jumlah Bersih': st.column_config.NumberColumn("Qty Terjual Bersih", format="%d", help="Total kuantitas barang fisik yang tidak diretur (basis kalkulasi Total HPP)"),
+                        'Harga (@)': st.column_config.NumberColumn("Harga (@)", format="%,d", help="Harga jual satuan produk"),
+                        'Total Penjualan Bersih': st.column_config.NumberColumn("Total Penjualan (Gross Sales)", format="%,d", help="Total nilai penjualan kotor riil transaksi (akumulasi Subtotal transaksi)"),
+                        'HPP (@)': st.column_config.NumberColumn("HPP (@)", format="%,d", help="Harga pokok per unit terjual"),
+                        'Total HPP': st.column_config.NumberColumn("Total HPP", format="%,d", help="Total modal barang = Qty Terjual Bersih × HPP (@)"),
+                        'Laba Bersih': st.column_config.NumberColumn("Laba Bersih", format="%,d", help="Total Penjualan + Total Biaya Shopee - Total HPP"),
                         'Margin Laba (%)': st.column_config.NumberColumn("Margin (%)", format="%.2f%%")
                     }
                     st.dataframe(
