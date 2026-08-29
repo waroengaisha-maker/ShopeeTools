@@ -515,7 +515,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
 
     # Agregasi per Nama Produk Tampilan DAN No. Pesanan
     agg_dict = {
-        'Harga Setelah Diskon': 'mean',
+        'Item_Price_Total': 'sum',
         'Jumlah': 'sum',
         'Returned quantity': 'sum',
         'Biaya Administrasi': 'sum',
@@ -529,15 +529,15 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     result = df_merged.groupby(['Nama Produk Tampilan', 'No. Pesanan']).agg(agg_dict).reset_index()
     result.rename(columns={'Nama Produk Tampilan': 'Nama Produk'}, inplace=True)
     
-    # Format & konversi ke integer
-    result['Harga (@)'] = result['Harga Setelah Diskon'].round().astype(int)
-    result.drop(columns=['Harga Setelah Diskon'], inplace=True, errors='ignore')
+    # Subtotal dihitung langsung dari jumlah nilai kotor (Gross) aktual per item, bukan estimasi perkalian
+    result['Subtotal'] = result['Item_Price_Total'].round().astype(int)
+    result.drop(columns=['Item_Price_Total'], inplace=True, errors='ignore')
+
+    # Harga (@) menggunakan Weighted Average (Subtotal / Jumlah) jika terjadi multi-baris dengan harga beda
+    result['Harga (@)'] = (result['Subtotal'] / result['Jumlah']).round().astype(int)
     
     # Hitung Jumlah Bersih (Qty Real Terjual setelah retur) untuk keperluan akuntansi
     result['Jumlah Bersih'] = result['Jumlah'] - result['Returned quantity']
-    
-    # Hitung Subtotal = Jumlah (Gross) * Harga (@)
-    result['Subtotal'] = (result['Jumlah'] * result['Harga (@)']).round().astype(int)
     
     # Hitung Subtotal Biaya = Biaya Administrasi + Biaya Gratis Ongkir XTRA + Biaya Promo XTRA
     result['Subtotal Biaya'] = (result['Biaya Administrasi'] + result['Biaya Gratis Ongkir XTRA'] + result['Biaya Promo XTRA']).round().astype(int)
