@@ -293,17 +293,22 @@ def generate_product_summary(df, hpp_lookup=None):
 
     # Pastikan tipe data numerik
     clean_df['Jumlah Bersih'] = pd.to_numeric(clean_df['Jumlah Bersih'], errors='coerce').fillna(0).astype(int)
+    clean_df['Jumlah'] = pd.to_numeric(clean_df['Jumlah'], errors='coerce').fillna(0).astype(int)
     clean_df['Harga (@)'] = pd.to_numeric(clean_df['Harga (@)'], errors='coerce').fillna(0).astype(int)
+    clean_df['Subtotal'] = pd.to_numeric(clean_df['Subtotal'], errors='coerce').fillna(0).astype(int)
     clean_df['Total Biaya'] = pd.to_numeric(clean_df['Total Biaya'], errors='coerce').fillna(0).astype(int)
 
     # Grouping berdasarkan Nama Produk dan Harga (@)
+    # Sumber kebenaran finansial: Subtotal dan Total Biaya di-SUM langsung dari data transaksi
     grouped = clean_df.groupby(['Nama Produk', 'Harga (@)'], as_index=False).agg({
         'Jumlah Bersih': 'sum',
+        'Subtotal': 'sum',
         'Total Biaya': 'sum'
     })
 
-    # Hitung total penjualan bersih (Gross Subtotal)
-    grouped['Total Penjualan Bersih'] = (grouped['Jumlah Bersih'] * grouped['Harga (@)']).astype(int)
+    # Total Penjualan Bersih diambil langsung dari agregasi Subtotal transaksi (Sumber Kebenaran Finansial)
+    grouped['Total Penjualan Bersih'] = grouped['Subtotal'].astype(int)
+    grouped.drop(columns=['Subtotal'], inplace=True, errors='ignore')
 
     # Urutkan berdasarkan Nama Produk lalu Harga (@)
     grouped = grouped.sort_values(by=['Nama Produk', 'Harga (@)'], ascending=[True, True]).reset_index(drop=True)
@@ -313,15 +318,6 @@ def generate_product_summary(df, hpp_lookup=None):
 
     # Tambahkan kalkulasi HPP jika hpp_lookup disediakan
     if hpp_lookup is not None:
-        def get_item_hpp(row):
-            p_name = row['Nama Produk']
-            qty = row['Total Jumlah Bersih']
-            info = hpp_lookup.get(p_name, {})
-            harga = info.get('HargaPokok', 0)
-            konv = info.get('Konversi', 1) or 1
-            unit_hpp = harga / konv
-            return int(round(qty * unit_hpp))
-
         def get_hpp_unit(p_name):
             info = hpp_lookup.get(p_name, {})
             harga = info.get('HargaPokok', 0)
@@ -335,7 +331,7 @@ def generate_product_summary(df, hpp_lookup=None):
         grouped['HPP (@)'] = grouped['Nama Produk'].apply(get_hpp_unit)
         grouped['Total HPP'] = (grouped['Total Jumlah Bersih'] * grouped['HPP (@)']).astype(int)
         
-        # Laba Bersih = Subtotal + Total Biaya Shopee - Total HPP (Total Biaya bernilai negatif)
+        # Laba Bersih = Total Penjualan Bersih (Subtotal Riil) + Total Biaya Shopee - Total HPP (Total Biaya bernilai negatif)
         grouped['Laba Bersih'] = (grouped['Total Penjualan Bersih'] + grouped['Total Biaya'] - grouped['Total HPP']).astype(int)
         grouped['Margin Laba (%)'] = grouped.apply(
             lambda r: (r['Laba Bersih'] / r['Total Penjualan Bersih'] * 100) if r['Total Penjualan Bersih'] > 0 else 0.0,
