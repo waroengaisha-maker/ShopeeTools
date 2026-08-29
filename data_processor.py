@@ -498,78 +498,83 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         df_income['Total Biaya'] = 0
     
     # Re-merge setelah hitung Total Biaya
-    cols_to_merge = keys + ['Total Biaya', 'Biaya Administrasi', 'Biaya Proses Pesanan', 'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Pajak']
+    fee_columns = ['Total Biaya', 'Biaya Administrasi', 'Biaya Proses Pesanan', 'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Pajak']
+    cols_to_merge = keys + fee_columns
     df_merged = pd.merge(df_order, df_income[cols_to_merge], on=keys, how='left')
-    
-    # Isi NaN dengan 0
-    for col in ['Total Biaya', 'Biaya Administrasi', 'Biaya Proses Pesanan', 'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Pajak']:
-        df_merged[col] = df_merged[col].fillna(0)
 
     # Penggabungan Nama Produk dan Nama Variasi untuk laporan final (setelah join sukses)
     df_merged['Nama Produk'] = df_merged['Nama Produk'].fillna('')
     df_merged['Nama Variasi'] = df_merged['Nama Variasi'].fillna('')
     df_merged['Nama Produk Tampilan'] = df_merged.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
 
-    # Agregasi akhir
-    df_merged['Harga Setelah Diskon'] = df_merged['Harga Setelah Diskon'].astype(float)
-
     # Agregasi per Nama Produk Tampilan DAN No. Pesanan
+    # Untuk kolom biaya: gunakan custom sum yang menjaga NaN jika SEMUA nilai dalam grup adalah NaN (belum settlement)
+    def sum_or_nan(series):
+        if series.isna().all():
+            return np.nan
+        return series.dropna().sum()
+
     agg_dict = {
         'Item_Price_Total': 'sum',
         'Jumlah': 'sum',
         'Returned quantity': 'sum',
-        'Biaya Administrasi': 'sum',
-        'Biaya Gratis Ongkir XTRA': 'sum',
-        'Biaya Promo XTRA': 'sum',
-        'Biaya Proses Pesanan': 'sum',
-        'Total Biaya': 'sum',
-        'Pajak': 'sum'
+        'Biaya Administrasi': sum_or_nan,
+        'Biaya Gratis Ongkir XTRA': sum_or_nan,
+        'Biaya Promo XTRA': sum_or_nan,
+        'Biaya Proses Pesanan': sum_or_nan,
+        'Total Biaya': sum_or_nan,
+        'Pajak': sum_or_nan
     }
     
     result = df_merged.groupby(['Nama Produk Tampilan', 'No. Pesanan']).agg(agg_dict).reset_index()
     result.rename(columns={'Nama Produk Tampilan': 'Nama Produk'}, inplace=True)
     
-    # Subtotal dihitung langsung dari jumlah nilai kotor (Gross) aktual per item, bukan estimasi perkalian
+    # Subtotal dihitung langsung dari jumlah nilai kotor (Gross) aktual per item
     result['Subtotal'] = result['Item_Price_Total'].round().astype(int)
     result.drop(columns=['Item_Price_Total'], inplace=True, errors='ignore')
 
-    # Harga (@) menggunakan Weighted Average (Subtotal / Jumlah) jika terjadi multi-baris dengan harga beda
+    # Harga (@) menggunakan Weighted Average (Subtotal / Jumlah)
     result['Harga (@)'] = (result['Subtotal'] / result['Jumlah']).round().astype(int)
     
     # Hitung Jumlah Bersih (Qty Real Terjual setelah retur) untuk keperluan akuntansi
     result['Jumlah Bersih'] = result['Jumlah'] - result['Returned quantity']
     
-    # Hitung Subtotal Biaya = Biaya Administrasi + Biaya Gratis Ongkir XTRA + Biaya Promo XTRA
-    result['Subtotal Biaya'] = (result['Biaya Administrasi'] + result['Biaya Gratis Ongkir XTRA'] + result['Biaya Promo XTRA']).round().astype(int)
-    
-    numeric_cols = [
-        'Harga (@)',
-        'Jumlah', 
-        'Returned quantity',
-        'Jumlah Bersih',
-        'Subtotal',
-        'Biaya Administrasi', 
-        'Biaya Gratis Ongkir XTRA', 
-        'Biaya Promo XTRA', 
-        'Subtotal Biaya',
-        'Biaya Proses Pesanan', 
-        'Total Biaya', 
-        'Pajak'
-    ]
-    for col in numeric_cols:
+    # Hitung Subtotal Biaya = Biaya Administrasi + Biaya Gratis Ongkir XTRA + Biaya Promo XTRA (hanya jika ada biaya)
+    def calc_subtotal_biaya(row):
+        adm = row['Biaya Administrasi']
+        xtra = row['Biaya Gratis Ongkir XTRA']
+        promo = row['Biaya Promo XTRA']
+        if pd.isna(adm) and pd.isna(xtra) and pd.isna(promo):
+            return np.nan
+        return (0 if pd.isna(adm) else adm) + (0 if pd.isna(xtra) else xtra) + (0 if pd.isna(promo) else promo)
+
+    result['Subtotal Biaya'] = result.apply(calc_subtotal_biaya, axis=1)
+
+    # Tandai baris yang belum settlement (No. Pesanan tidak ada di laporan Penghasilan)
+    result['Is_Settled'] = result['No. Pesanan'].astype(str).isin(settled_order_ids)
+
+    # Kolom kuantitas dan uang kotor selalu integer
+    gross_numeric_cols = ['Harga (@)', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal']
+    for col in gross_numeric_cols:
         result[col] = result[col].round().astype(int)
+
+    # Kolom biaya: tetap nullable / float agar membedakan 0 (bebas biaya) vs NaN (belum ada data income)
+    for col in fee_columns + ['Subtotal Biaya']:
+        result[col] = pd.to_numeric(result[col], errors='coerce')
     
     # Urutkan data produk berdasarkan Nama Produk dan Harga (@) Ascending (tanpa mengikutsertakan baris Total)
     result = result.sort_values(by=['Nama Produk', 'Harga (@)'], ascending=[True, True]).reset_index(drop=True)
     
-    # Hitung kolom persentase (%) untuk masing-masing baris produk
-    result[COL_PCT_ADM] = [abs(adm) / sub * 100 if sub > 0 else 0.0 for adm, sub in zip(result['Biaya Administrasi'], result['Subtotal'])]
-    result[COL_PCT_XTRA] = [abs(xtra) / sub * 100 if sub > 0 else 0.0 for xtra, sub in zip(result['Biaya Gratis Ongkir XTRA'], result['Subtotal'])]
-    result[COL_PCT_PROMO] = [abs(promo) / sub * 100 if sub > 0 else 0.0 for promo, sub in zip(result['Biaya Promo XTRA'], result['Subtotal'])]
-    result[COL_PCT_SUB_BIAYA] = [abs(b) / sub * 100 if sub > 0 else 0.0 for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
-    
-    # Tandai baris yang belum settlement (No. Pesanan tidak ada di laporan Penghasilan)
-    result['Is_Settled'] = result['No. Pesanan'].astype(str).isin(settled_order_ids)
+    # Hitung kolom persentase (%) untuk masing-masing baris produk (hanya untuk yang sudah ada data biaya / settled)
+    def calc_pct(fee_val, subtotal_val):
+        if pd.isna(fee_val) or subtotal_val <= 0:
+            return np.nan
+        return abs(fee_val) / subtotal_val * 100
+
+    result[COL_PCT_ADM] = [calc_pct(adm, sub) for adm, sub in zip(result['Biaya Administrasi'], result['Subtotal'])]
+    result[COL_PCT_XTRA] = [calc_pct(xtra, sub) for xtra, sub in zip(result['Biaya Gratis Ongkir XTRA'], result['Subtotal'])]
+    result[COL_PCT_PROMO] = [calc_pct(promo, sub) for promo, sub in zip(result['Biaya Promo XTRA'], result['Subtotal'])]
+    result[COL_PCT_SUB_BIAYA] = [calc_pct(b, sub) for b, sub in zip(result['Subtotal Biaya'], result['Subtotal'])]
     
     # Atur posisi kolom:
     result = result[[
