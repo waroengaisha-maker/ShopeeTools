@@ -68,26 +68,62 @@ def clean_shopee_name_for_suggestion(name):
     return ' '.join(s.lower().split())
 
 
+def get_suggestion_with_confidence(shopee_name, df_hpp):
+    """Mencari pasangan HPP terbaik beserta skor kecocokan (confidence 0.0 - 1.0).
+    
+    Returns:
+        tuple: (best_item_key, best_score, best_item_label) atau (None, 0.0, None)
+    """
+    if df_hpp.empty:
+        return None, 0.0, None
+
+    # Gunakan baris dengan Konversi == 1.0 (satuan terkecil/ecer) sebagai basis nama
+    df_base = df_hpp.sort_values(by=['Konversi'], ascending=[True]).drop_duplicates(subset=['KodeItem'], keep='first')
+    
+    cleaned_shopee = clean_shopee_name_for_suggestion(shopee_name)
+    best_key = None
+    best_score = 0.0
+    best_label = None
+
+    for _, row in df_base.iterrows():
+        cleaned_master = clean_shopee_name_for_suggestion(row['NamaItem'])
+        # Hitung SequenceMatcher ratio
+        score = difflib.SequenceMatcher(None, cleaned_shopee, cleaned_master).ratio()
+        
+        # Beri boost jika ada exact match kata kunci utama
+        if cleaned_master and cleaned_master == cleaned_shopee:
+            score = 1.0
+        elif cleaned_master and cleaned_master in cleaned_shopee:
+            # Jika nama master terkandung utuh dalam nama produk Shopee (misal nama Shopee lebih panjang dengan variasi)
+            coverage = len(cleaned_master) / len(cleaned_shopee)
+            score = max(score, min(0.95, 0.80 + (0.20 * coverage)))
+
+        if score > best_score:
+            best_score = score
+            best_key = row['ItemKey']
+            best_label = f"{row['KodeItem']} - {row['NamaItem']} [{row['Satuan']} (isi {row['Konversi']:g})]"
+
+    return best_key, round(best_score, 3), best_label
+
+
 def auto_suggest_mapping(shopee_product_names, df_hpp):
-    """Menghasilkan tebakan awal otomatis untuk produk Shopee yang belum dimapping (default satuan terkecil / konversi 1.0)."""
+    """Menghasilkan mapping dengan filter confidence ketat:
+    - Confidence >= 0.90 (90%): Auto-mapped & disimpan permanen.
+    - Confidence 0.70 - 0.89 (70-89%): Disarankan di memori / butuh konfirmasi user (TIDAK auto-save).
+    - Confidence < 0.70 (<70%): Dibiarkan kosong / Unmapped.
+    """
     existing_mapping = load_mapping()
     updated = False
     
     if df_hpp.empty:
         return existing_mapping
 
-    # Prioritaskan baris dengan Konversi == 1.0 (satuan PCS/ecer) untuk tebakan awal
-    df_base = df_hpp.sort_values(by=['Konversi'], ascending=[True]).drop_duplicates(subset=['KodeItem'], keep='first')
-    hpp_clean_map = {clean_shopee_name_for_suggestion(row['NamaItem']): row['ItemKey'] for _, row in df_base.iterrows()}
-    hpp_clean_keys = list(hpp_clean_map.keys())
-
     for s_name in shopee_product_names:
         if s_name not in existing_mapping:
-            cleaned_s = clean_shopee_name_for_suggestion(s_name)
-            matches = difflib.get_close_matches(cleaned_s, hpp_clean_keys, n=1, cutoff=0.35)
-            if matches:
-                suggested_key = hpp_clean_map[matches[0]]
-                existing_mapping[s_name] = suggested_key
+            best_key, score, _ = get_suggestion_with_confidence(s_name, df_hpp)
+            # Hanya simpan permanen jika tingkat keyakinan >= 90%
+            if score >= 0.90 and best_key:
+                existing_mapping[s_name] = best_key
                 updated = True
 
     if updated:

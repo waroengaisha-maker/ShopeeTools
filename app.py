@@ -7,7 +7,8 @@ from data_processor import (
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 from hpp_manager import (
-    load_hpp_master, load_mapping, save_mapping, auto_suggest_mapping
+    load_hpp_master, load_mapping, save_mapping, auto_suggest_mapping,
+    get_suggestion_with_confidence
 )
 import io
 
@@ -718,11 +719,30 @@ elif menu == "📦 Kelola Master HPP":
             }
 
             table_rows = []
+            needs_confirm_count = 0
             for prod in all_prods_list:
                 cur_key = mapping_dict.get(prod, '')
-                cur_label = key_to_label.get(cur_key, BELUM_DIPETAKAN)
+                
+                # Cek confidence suggestion jika belum dimapping
+                if not cur_key:
+                    sugg_key, sugg_score, _ = get_suggestion_with_confidence(prod, df_hpp_master)
+                    if sugg_score >= 0.70 and sugg_key:
+                        # 70-89% (Needs confirmation): Tampilkan suggestion sebagai default pilihan agar user tinggal review & simpan
+                        cur_key = sugg_key
+                        cur_label = key_to_label.get(sugg_key, BELUM_DIPETAKAN)
+                        match_status = f"🔍 Rekomendasi ({int(sugg_score*100)}%)"
+                        needs_confirm_count += 1
+                    else:
+                        # < 70%: Unmapped
+                        cur_label = BELUM_DIPETAKAN
+                        match_status = "❌ Belum Terpetakan"
+                else:
+                    cur_label = key_to_label.get(cur_key, BELUM_DIPETAKAN)
+                    match_status = "✅ Terpetakan"
+
                 hpp_val = key_to_hpp.get(cur_key, None) if cur_key else None
                 table_rows.append({
+                    'Status': match_status,
                     'Nama Produk (Shopee)': prod,
                     'Pemetaan HPP (ItemKey & Satuan)': cur_label,
                     'HPP (@)': hpp_val,
@@ -733,17 +753,22 @@ elif menu == "📦 Kelola Master HPP":
             unmapped_count = sum(1 for r in table_rows if r['Pemetaan HPP (ItemKey & Satuan)'] == BELUM_DIPETAKAN)
             zero_hpp_count = sum(1 for r in table_rows if r['HPP (@)'] == 0 or r['HPP (@)'] is None)
 
-            m_c1, m_c2, m_c3 = st.columns(3)
+            m_c1, m_c2, m_c3, m_c4 = st.columns(4)
             with m_c1:
                 st.metric("Total Produk Terdaftar", f"{len(table_rows)} SKU")
             with m_c2:
-                st.metric("Belum Dipetakan", f"{unmapped_count} SKU", delta=f"-{unmapped_count}" if unmapped_count > 0 else "Semua Beres", delta_color="inverse")
+                st.metric("Perlu Konfirmasi", f"{needs_confirm_count} SKU", delta=f"{needs_confirm_count} Rekomendasi" if needs_confirm_count > 0 else "0", delta_color="normal")
             with m_c3:
+                st.metric("Belum Terpetakan (<70%)", f"{unmapped_count} SKU", delta=f"-{unmapped_count}" if unmapped_count > 0 else "Semua Beres", delta_color="inverse")
+            with m_c4:
                 st.metric("HPP Kosong / 0", f"{zero_hpp_count} SKU", delta=f"-{zero_hpp_count}" if zero_hpp_count > 0 else "Aman", delta_color="inverse")
 
             edited_df = st.data_editor(
                 mapping_df,
                 column_config={
+                    'Status': st.column_config.TextColumn(
+                        "Status", disabled=True, width="small"
+                    ),
                     'Nama Produk (Shopee)': st.column_config.TextColumn(
                         "Nama Produk (Shopee)", disabled=True, width="large"
                     ),
