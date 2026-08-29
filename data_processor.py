@@ -546,8 +546,8 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
 
     result['Subtotal Biaya'] = result.apply(calc_subtotal_biaya, axis=1)
 
-    # Tandai baris yang belum settlement (No. Pesanan tidak ada di laporan Penghasilan)
-    result['Is_Settled'] = result['No. Pesanan'].astype(str).isin(settled_order_ids)
+    # Tandai baris yang settle secara presisi PER-ITEM (berdasarkan ada/tidaknya data pelepasan dana dari Income)
+    result['Is_Settled'] = result['Total Biaya'].notna()
 
     # Kolom kuantitas dan uang kotor selalu integer
     gross_numeric_cols = ['Harga (@)', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal']
