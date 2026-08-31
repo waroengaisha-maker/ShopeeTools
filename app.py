@@ -516,12 +516,21 @@ elif menu == "reconciliation":
                     return row['Jumlah Bersih'] * (info.get('HargaPokok', 0) / (info.get('Konversi', 1) or 1))
 
                 # Biaya non-proses mengikuti histori produk yang sudah settled.
-                # Biaya proses tidak diperkirakan dari rasio: selalu Rp1.250 per pesanan.
+                # Estimasi biaya proses memakai rata-rata aktual dari laporan Income;
+                # nilai ini hanya proyeksi pending, bukan biaya transaksi aktual.
                 history_subtotal = int(history_settled['Subtotal'].sum()) if not history_settled.empty else 0
                 history_total_fee = int(history_settled['Total Biaya'].sum()) if 'Total Biaya' in history_settled.columns else 0
                 history_process_fee = (
                     int(history_settled['Biaya Proses Pesanan'].sum())
                     if 'Biaya Proses Pesanan' in history_settled.columns else 0
+                )
+                history_settled_order_count = (
+                    history_settled['No. Pesanan'].dropna().nunique()
+                    if 'No. Pesanan' in history_settled.columns else 0
+                )
+                estimated_process_fee_per_order = (
+                    abs(history_process_fee) / history_settled_order_count
+                    if history_settled_order_count > 0 else 0
                 )
                 settled_non_process_fee = max(abs(history_total_fee) - abs(history_process_fee), 0)
                 global_non_process_fee_ratio = (
@@ -545,7 +554,9 @@ elif menu == "reconciliation":
                     row['Subtotal'] * prod_fee_stats.get(row['Nama Produk'], global_non_process_fee_ratio)
                     for _, row in unsettled.iterrows()
                 ))) if not unsettled.empty else 0
-                s['est_process_fee'] = 1250 * len(unsettled['No. Pesanan'].dropna().unique()) if not unsettled.empty else 0
+                s['est_process_fee'] = int(round(
+                    estimated_process_fee_per_order * len(unsettled['No. Pesanan'].dropna().unique())
+                )) if not unsettled.empty else 0
                 s['est_unsettled_fee'] = -(s['est_non_process_fee'] + s['est_process_fee'])
                 s['est_unsettled_net'] = s['unsettled_subtotal'] + s['est_unsettled_fee']
                 s['effective_fee_ratio'] = (
@@ -968,7 +979,7 @@ elif menu == "reconciliation":
                         '<div class="summary-card card-fees">'
                         '<div class="label">Estimasi Total Biaya</div>'
                         f'<div class="value">Rp {filt_estimated_fee:,.0f}</div>'
-                        f'<div class="pct">Histori produk + proses Rp {filt_estimated_process_fee:,.0f} (Rp 1.250/pesanan)</div>'
+                        f'<div class="pct">Histori produk + estimasi proses aktual Rp {filt_estimated_process_fee:,.0f}</div>'
                         '</div>'
                         '<div class="summary-card card-potential">'
                         '<div class="label">Estimasi Net Pending</div>'
