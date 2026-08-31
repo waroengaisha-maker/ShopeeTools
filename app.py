@@ -254,6 +254,13 @@ elif menu == "reconciliation":
             key="hpp_override_uploader",
             help="Unggah jika ingin memakai HPP periode khusus. Jika kosong, sistem otomatis memakai master HPP default toko."
         )
+        # Simpan sumber upload agar tab Pemetaan tetap dapat membaca daftar produk
+        # walaupun pengguna berpindah menu sebelum menjalankan rekonsiliasi.
+        if uploaded_order is not None:
+            # Simpan byte aktual, bukan hanya handle UploadedFile yang dapat
+            # hilang ketika widget tidak sedang dirender setelah navigasi menu.
+            st.session_state.uploaded_order_bytes = uploaded_order.getvalue()
+            st.session_state.uploaded_order_name = uploaded_order.name
 
     if not uploaded_order or not uploaded_income:
         st.info("👈 **Silakan unggah Laporan Order dan Laporan Penghasilan Shopee di sidebar sebelah kiri** untuk memulai rekonsiliasi.")
@@ -1045,10 +1052,57 @@ elif menu == "hpp":
         st.subheader("🔗 Pemetaan SKU Shopee ke Satuan Master HPP")
         st.caption("Petakan setiap produk di toko Shopee ke satuan master yang tepat (PCS, RTG, PAK, DUS). Anda juga dapat langsung mengedit nilai HPP/Unit.")
 
+        with st.form("add_manual_shopee_product", clear_on_submit=True):
+            manual_product_name = st.text_input(
+                "Tambah produk Shopee yang belum tampil di tabel",
+                placeholder="Tempel nama produk persis seperti di Shopee",
+                help="Gunakan ini untuk produk yang belum ada di hasil rekonsiliasi sesi ini. Setelah ditambahkan, pilih master HPP-nya pada tabel di bawah.",
+            )
+            add_manual_product = st.form_submit_button("➕ Tambahkan ke Pemetaan")
+
+        if add_manual_product:
+            manual_product_name = manual_product_name.strip()
+            if not manual_product_name:
+                st.warning("Masukkan nama produk Shopee terlebih dahulu.")
+            elif manual_product_name in mapping_dict:
+                st.info("Produk tersebut sudah ada di tabel pemetaan.")
+            else:
+                # Nilai kosong menandakan produk sudah terdaftar, tetapi belum
+                # dipetakan ke satuan/item master HPP mana pun.
+                mapping_dict[manual_product_name] = ""
+                save_mapping(mapping_dict)
+                st.success("Produk ditambahkan. Silakan pilih master HPP-nya pada tabel.")
+                st.rerun()
+
         # Ambil daftar produk yang sudah ada di mapping atau dari file rekonsiliasi jika ada
         all_prods_set = set(mapping_dict.keys())
         if 'result' in st.session_state and not st.session_state.result.empty:
             all_prods_set.update(st.session_state.result['Nama Produk'].dropna().unique().tolist())
+        uploaded_order_bytes = st.session_state.get('uploaded_order_bytes')
+        uploaded_order_name = st.session_state.get('uploaded_order_name')
+        # Fallback untuk sesi yang sudah memiliki widget uploader sebelum byte
+        # disimpan (misalnya setelah hot-reload aplikasi).
+        if not uploaded_order_bytes:
+            active_order_upload = st.session_state.get('order_uploader')
+            if active_order_upload is not None:
+                uploaded_order_bytes = active_order_upload.getvalue()
+                uploaded_order_name = active_order_upload.name
+                st.session_state.uploaded_order_bytes = uploaded_order_bytes
+                st.session_state.uploaded_order_name = uploaded_order_name
+
+        if uploaded_order_bytes:
+            uploaded_order_name = uploaded_order_name or 'file upload aktif'
+            st.caption(f"Sumber produk: **{uploaded_order_name}** (file upload aktif; bukan folder lokal)")
+            try:
+                uploaded_order_for_mapping = io.BytesIO(uploaded_order_bytes)
+                uploaded_product_options = get_order_filter_options(uploaded_order_for_mapping)
+                all_prods_set.update(uploaded_product_options.get('Nama Produk', []))
+            except Exception:
+                # Produk dari hasil rekonsiliasi/mapping tetap ditampilkan jika file
+                # upload gagal dibaca.
+                pass
+        else:
+            st.info("Belum ada file Order upload aktif. Buka menu Rekonsiliasi dan unggah file Order terlebih dahulu.")
         
         all_prods_list = sorted(list(all_prods_set))
 
