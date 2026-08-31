@@ -12,6 +12,7 @@ from hpp_manager import (
 )
 import io
 import hashlib
+import logging
 import re
 import shutil
 import time
@@ -36,38 +37,117 @@ st.session_state.session_id = session_token
 SESSION_UPLOAD_ROOT = Path("data") / "uploads"
 SESSION_UPLOAD_DIR = SESSION_UPLOAD_ROOT / st.session_state.session_id
 SESSION_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
+SESSION_CLEANUP_INTERVAL_SECONDS = 10 * 60
+SESSION_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
+LOGGER = logging.getLogger(__name__)
 
 
-def cleanup_expired_session_uploads(active_session_id):
-    """Hapus folder upload sesi lama tanpa menyentuh sesi yang sedang aktif."""
-    if not SESSION_UPLOAD_ROOT.is_dir():
+def _short_session_id(session_id):
+    return f"{session_id[:8]}..."
+
+
+def touch_session_activity():
+    """Catat aktivitas sesi aktif tanpa mengganggu alur upload bila disk terkunci."""
+    try:
+        SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        (SESSION_UPLOAD_DIR / ".last_activity").touch()
+    except (PermissionError, OSError) as exc:
+        LOGGER.warning("Session activity update failed for %s: %s", _short_session_id(st.session_state.session_id), exc)
+
+
+def _get_session_activity_timestamp(session_dir):
+    """Ambil aktivitas sesi; None berarti sesi tidak aman untuk dihapus."""
+    marker_path = session_dir / ".last_activity"
+    try:
+        return marker_path.stat().st_mtime
+    except FileNotFoundError:
+        # Folder dari versi sebelum marker memakai aktivitas file/directory sebagai
+        # fallback kompatibel. Kegagalan membaca fallback selalu berarti KEEP.
+        pass
+    except (PermissionError, OSError) as exc:
+        LOGGER.warning("Session cleanup failed to read activity for %s: %s", _short_session_id(session_dir.name), exc)
+        return None
+
+    try:
+        latest_activity = session_dir.stat().st_mtime
+        for child in session_dir.iterdir():
+            latest_activity = max(latest_activity, child.stat().st_mtime)
+        return latest_activity
+    except (PermissionError, OSError) as exc:
+        LOGGER.warning("Session cleanup failed to verify legacy session %s: %s", _short_session_id(session_dir.name), exc)
+        return None
+
+
+def cleanup_expired_sessions():
+    """Hapus hanya child session yang terverifikasi kedaluwarsa dari data/uploads."""
+    active_session_id = st.session_state.session_id
+    try:
+        SESSION_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+        upload_root = SESSION_UPLOAD_ROOT.resolve()
+    except (PermissionError, OSError) as exc:
+        LOGGER.warning("Session cleanup failed to prepare upload root: %s", exc)
         return
 
+    LOGGER.info("Session cleanup started")
     now = time.time()
-    for session_dir in SESSION_UPLOAD_ROOT.iterdir():
-        # Batasi target hanya pada folder dengan format ID sesi yang dibuat app.
-        if (
-            not session_dir.is_dir()
-            or session_dir.name == active_session_id
-            or not re.fullmatch(r"[a-f0-9]{32}", session_dir.name)
-        ):
+    try:
+        session_children = list(upload_root.iterdir())
+    except (PermissionError, OSError) as exc:
+        LOGGER.warning("Session cleanup failed to scan upload root: %s", exc)
+        return
+
+    for session_dir in session_children:
+        # Hanya folder sesi langsung dengan ID yang dibuat aplikasi yang boleh
+        # diproses. Symlink dilewati agar cleanup tidak dapat menjangkau path lain.
+        try:
+            if not session_dir.is_dir() or session_dir.is_symlink() or not SESSION_ID_PATTERN.fullmatch(session_dir.name):
+                continue
+        except (PermissionError, OSError) as exc:
+            LOGGER.warning("Session cleanup failed to inspect child %s: %s", _short_session_id(session_dir.name), exc)
+            continue
+        if session_dir.name == active_session_id:
+            LOGGER.info("Session cleanup skipped active session %s", _short_session_id(session_dir.name))
             continue
         try:
-            if now - session_dir.stat().st_mtime > SESSION_UPLOAD_MAX_AGE_SECONDS:
-                shutil.rmtree(session_dir)
-        except OSError:
-            # Upload sesi lain dapat sedang dipakai; coba lagi pada pemuatan app berikutnya.
+            if session_dir.resolve().parent != upload_root:
+                LOGGER.warning("Session cleanup skipped unsafe path %s", _short_session_id(session_dir.name))
+                continue
+        except (PermissionError, OSError) as exc:
+            LOGGER.warning("Session cleanup failed to verify path %s: %s", _short_session_id(session_dir.name), exc)
             continue
 
+        last_activity = _get_session_activity_timestamp(session_dir)
+        if last_activity is None or now - last_activity <= SESSION_UPLOAD_MAX_AGE_SECONDS:
+            continue
 
-if not st.session_state.get("session_upload_cleanup_done"):
-    cleanup_expired_session_uploads(st.session_state.session_id)
-    st.session_state.session_upload_cleanup_done = True
+        LOGGER.info("Session cleanup found expired session %s", _short_session_id(session_dir.name))
+        try:
+            shutil.rmtree(session_dir)
+            LOGGER.info("Session cleanup removed expired session %s", _short_session_id(session_dir.name))
+        except FileNotFoundError:
+            LOGGER.info("Session cleanup found session already removed %s", _short_session_id(session_dir.name))
+        except (PermissionError, OSError) as exc:
+            LOGGER.warning("Session cleanup failed for %s: %s", _short_session_id(session_dir.name), exc)
+
+
+def maybe_cleanup_expired_sessions():
+    """Throttle full scan agar rerun Streamlit tidak selalu menjalankan cleanup."""
+    now = time.time()
+    last_cleanup = st.session_state.get("session_upload_cleanup_last_run", 0.0)
+    if isinstance(last_cleanup, (int, float)) and now - last_cleanup < SESSION_CLEANUP_INTERVAL_SECONDS:
+        return
+    st.session_state.session_upload_cleanup_last_run = now
+    cleanup_expired_sessions()
+
+
+touch_session_activity()
+maybe_cleanup_expired_sessions()
 
 
 def persist_session_order_upload(uploaded_file):
     """Simpan file Order upload ke folder session dan kembalikan byte/path aktif."""
     raw_bytes = uploaded_file.getvalue()
+    touch_session_activity()
     digest = hashlib.sha256(raw_bytes).hexdigest()
     if st.session_state.get('uploaded_order_sha256') != digest:
         SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
