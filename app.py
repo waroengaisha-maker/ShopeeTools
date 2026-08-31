@@ -1106,10 +1106,13 @@ if menu == "dashboard":
                             .map(_style_hpp_cell, subset=['HPP (@)'])
                             .map(_style_laba_cell, subset=['Laba Bersih'])
                         )
-                        st.dataframe(
+                        detail_table_event = st.dataframe(
                             styled_detail_df,
                             use_container_width=True,
                             hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key="daily_detail_table",
                             column_config={
                                 'No. Pesanan': st.column_config.TextColumn('No. Pesanan'),
                                 'Nama Produk': st.column_config.TextColumn('Nama Produk'),
@@ -1140,9 +1143,39 @@ if menu == "dashboard":
                             },
                         )
                         if not fee_detail_df.empty:
-                            with st.expander("Rincian Biaya", expanded=False):
+                            with st.expander("Rincian Biaya", expanded=True):
+                                selected_fee_order = None
+                                try:
+                                    selected_fee_rows = detail_table_event.selection.rows
+                                    if selected_fee_rows:
+                                        selected_fee_index = int(selected_fee_rows[0])
+                                        if 0 <= selected_fee_index < len(core_detail_df):
+                                            selected_fee_order = str(core_detail_df.iloc[selected_fee_index]['No. Pesanan'])
+                                except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                                    selected_fee_order = None
+
+                                show_all_fee_rows = st.checkbox(
+                                    "Tampilkan semua rincian biaya",
+                                    value=False,
+                                    key="show_all_daily_fee_rows",
+                                )
+                                fee_display_df = fee_detail_df.copy()
+                                if selected_fee_order and not show_all_fee_rows:
+                                    fee_display_df = fee_display_df[
+                                        fee_display_df['No. Pesanan'].astype(str) == selected_fee_order
+                                    ].copy()
+                                    st.caption(f"Rincian biaya untuk order {selected_fee_order}")
+                                elif selected_fee_order:
+                                    st.caption(f"Order terpilih: {selected_fee_order}")
+
+                                def _style_selected_fee_row(row):
+                                    if selected_fee_order and str(row.get('No. Pesanan', '')) == selected_fee_order:
+                                        return ['background-color: rgba(59, 130, 246, 0.18); color: #dbeafe; font-weight: 700;'] * len(row)
+                                    return [''] * len(row)
+
+                                styled_fee_df = fee_display_df.style.apply(_style_selected_fee_row, axis=1)
                                 st.dataframe(
-                                    fee_detail_df,
+                                    styled_fee_df,
                                     use_container_width=True,
                                     hide_index=True,
                                     column_config={
