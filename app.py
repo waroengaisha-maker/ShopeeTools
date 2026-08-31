@@ -746,15 +746,15 @@ html, body, [class*="css"] {
 }
 
 .dashboard-hero {
-    background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.88) 48%, rgba(17, 24, 39, 0.92) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 20px;
-    padding: 1.4rem 1.5rem;
+    background: #0d1117;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    padding: 1rem 1.05rem;
     margin-bottom: 1rem;
-    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.2);
+    box-shadow: none;
 }
 .dashboard-kicker {
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
     color: #93c5fd;
@@ -762,21 +762,21 @@ html, body, [class*="css"] {
     margin-bottom: 0.35rem;
 }
 .dashboard-title {
-    font-size: 2rem;
+    font-size: 1.55rem;
     line-height: 1.1;
     font-weight: 800;
     color: #f8fafc;
-    margin-bottom: 0.55rem;
+    margin-bottom: 0.65rem;
 }
 .dashboard-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 0.75rem;
-    margin-top: 1rem;
+    margin-top: 0.85rem;
 }
 .dashboard-meta-card {
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #111827;
+    border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 14px;
     padding: 0.85rem 1rem;
 }
@@ -840,18 +840,18 @@ html, body, [class*="css"] {
     color: #cbd5e1 !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"] {
-    background: rgba(15, 23, 42, 0.55);
-    border-color: rgba(255, 255, 255, 0.08) !important;
-    border-radius: 16px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.88) 48%, rgba(17, 24, 39, 0.92) 100%);
+    border: 1px solid rgba(148, 163, 184, 0.18) !important;
+    border-radius: 20px;
+    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.20);
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.section-parent-card) {
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 14px;
-    padding: 0.85rem 1rem !important;
+    background: linear-gradient(135deg, rgba(14, 42, 76, 0.98) 0%, rgba(19, 63, 105, 0.94) 48%, rgba(15, 42, 74, 0.98) 100%);
+    border: 1px solid rgba(96, 165, 250, 0.34) !important;
+    border-radius: 20px;
+    padding: 1.4rem 1.5rem !important;
     margin: 0.75rem 0;
-    box-shadow: none;
+    box-shadow: 0 14px 35px rgba(3, 25, 52, 0.28);
 }
 [data-testid="stExpander"] {
     background: rgba(15, 23, 42, 0.55);
@@ -914,10 +914,10 @@ html, body, [class*="css"] {
 .projection-card-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .section-metric-card {
     padding: 0.9rem 1rem;
-    border-radius: 16px;
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    box-shadow: none;
 }
 .section-metric-card .label {
     display: block;
@@ -948,7 +948,7 @@ html, body, [class*="css"] {
     box-shadow: none;
 }
 .section-parent-card .title { color: #f8fafc; font-size: 1.45rem; line-height: 1.1; font-weight: 800; }
-.section-parent-card .description { color: #93c5fd; font-size: 0.78rem; margin-top: 0.45rem; letter-spacing: 0.03em; }
+.section-parent-card .description { color: #bfdbfe; font-size: 0.78rem; margin-top: 0.45rem; letter-spacing: 0.03em; }
 .metric-blue .value { color: #38bdf8; }
 .metric-green .value { color: #4ade80; }
 .metric-red .value { color: #f87171; }
