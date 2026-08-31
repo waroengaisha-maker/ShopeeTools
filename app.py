@@ -255,152 +255,184 @@ if menu == "📊 Rekonsiliasi Shopee":
             result = st.session_state.result
             df_adj = st.session_state.get('df_adjustments', pd.DataFrame())
             
-            # ─── Filter Data ───
-            st.subheader("🔍 Filter Data")
-            f_col1, f_col2 = st.columns(2)
-            filter_options = st.session_state.get('filter_options', {})
-            
-            with f_col1:
-                allowed_filters = ['No. Pesanan', 'Nama Produk']
-                available_filters = [col for col in allowed_filters if col in result.columns]
-                if available_filters:
-                    filter_col = st.selectbox("Filter berdasarkan:", available_filters)
+            # ─── Helper: Hitung ringkasan finansial dari slice dataframe ───
+            def calc_summary(df_slice, df_adj_all, hpp_lookup_map, n_days):
+                """Menghitung semua metrik finansial dari suatu slice dataframe.
+                Returns dict berisi semua metrik.
+                """
+                s = {}
+                settled = df_slice[df_slice['Is_Settled'] == True].copy() if 'Is_Settled' in df_slice.columns else df_slice.copy()
+                unsettled = df_slice[df_slice['Is_Settled'] == False].copy() if 'Is_Settled' in df_slice.columns else pd.DataFrame()
+
+                s['total_subtotal'] = int(settled['Subtotal'].sum())
+                s['total_biaya'] = int(settled['Total Biaya'].sum())
+                s['tot_adm'] = int(settled['Biaya Administrasi'].sum()) if 'Biaya Administrasi' in settled.columns else 0
+                s['tot_xtra'] = int(settled['Biaya Gratis Ongkir XTRA'].sum()) if 'Biaya Gratis Ongkir XTRA' in settled.columns else 0
+                s['tot_promo'] = int(settled['Biaya Promo XTRA'].sum()) if 'Biaya Promo XTRA' in settled.columns else 0
+                s['tot_sub_biaya'] = int(settled['Subtotal Biaya'].sum()) if 'Subtotal Biaya' in settled.columns else (s['tot_adm'] + s['tot_xtra'] + s['tot_promo'])
+                s['tot_proses'] = int(settled['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in settled.columns else 0
+                s['tot_pajak'] = int(settled['Pajak'].sum()) if 'Pajak' in settled.columns else 0
+
+                sub = s['total_subtotal']
+                s['pct_adm'] = abs(s['tot_adm']) / sub * 100 if sub > 0 else 0
+                s['pct_xtra'] = abs(s['tot_xtra']) / sub * 100 if sub > 0 else 0
+                s['pct_promo'] = abs(s['tot_promo']) / sub * 100 if sub > 0 else 0
+                s['pct_sub_biaya'] = abs(s['tot_sub_biaya']) / sub * 100 if sub > 0 else 0
+
+                # Penyesuaian
+                if not df_adj_all.empty:
+                    active_orders = set(settled['No. Pesanan'].astype(str).unique())
+                    rel_adj = df_adj_all[df_adj_all['No. Pesanan'].astype(str).isin(active_orders)]
+                    s['total_penyesuaian'] = int(rel_adj['Biaya Penyesuaian'].sum()) if not rel_adj.empty else 0
+                    s['adj_orders_list'] = [o for o in rel_adj['No. Pesanan'].unique().tolist() if o and str(o) != 'nan']
+                    s['relevant_adj'] = rel_adj
                 else:
-                    filter_col = None
+                    s['total_penyesuaian'] = 0
+                    s['adj_orders_list'] = []
+                    s['relevant_adj'] = pd.DataFrame()
 
-            with f_col2:
-                if filter_col:
-                    unique_values = filter_options.get(filter_col, sorted(result[filter_col].dropna().astype(str).unique().tolist()))
-                    selected_values = st.multiselect(f"Pilih nilai untuk {filter_col}:", unique_values, default=[])
-                    if selected_values:
-                        filtered_result = result[result[filter_col].astype(str).isin([str(v) for v in selected_values])].copy()
-                    else:
-                        filtered_result = result.copy()
+                s['pct_biaya'] = abs(s['total_biaya']) / sub * 100 if sub > 0 else 0
+                s['total_penghasilan'] = s['total_subtotal'] + s['total_biaya'] + s['total_penyesuaian']
+
+                # Estimasi pending
+                s['unsettled_result'] = unsettled
+                s['settled_result'] = settled
+                s['unsettled_subtotal'] = int(unsettled['Subtotal'].sum()) if not unsettled.empty else 0
+                global_fee_ratio = (abs(s['total_biaya']) / sub) if sub > 0 else 0.15
+
+                if not unsettled.empty and not settled.empty:
+                    prod_fee_stats = settled.groupby('Nama Produk').apply(
+                        lambda g: (abs(g['Total Biaya'].sum()) / g['Subtotal'].sum()) if g['Subtotal'].sum() > 0 else global_fee_ratio,
+                        include_groups=False
+                    ).to_dict()
+                    def est_net(row):
+                        return row['Subtotal'] * (1 - prod_fee_stats.get(row['Nama Produk'], global_fee_ratio))
+                    s['est_unsettled_net'] = int(round(unsettled.apply(est_net, axis=1).sum()))
+                    s['effective_fee_ratio'] = (1 - (s['est_unsettled_net'] / s['unsettled_subtotal'])) if s['unsettled_subtotal'] > 0 else global_fee_ratio
                 else:
-                    filtered_result = result.copy()
+                    s['effective_fee_ratio'] = global_fee_ratio
+                    s['est_unsettled_net'] = int(s['unsettled_subtotal'] * (1 - global_fee_ratio))
 
-            # Reset dan sisipkan kolom 'No.' agar selalu berurutan 1..N
-            if 'No.' in filtered_result.columns:
-                filtered_result = filtered_result.drop(columns=['No.'])
-            filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
+                s['total_proyeksi'] = s['total_penghasilan'] + s['est_unsettled_net']
 
-            # ─── Ringkasan Finansial (HANYA dari pesanan yang SUDAH settlement) ───
-            settled_result = filtered_result[filtered_result['Is_Settled'] == True].copy() if 'Is_Settled' in filtered_result.columns else filtered_result.copy()
+                # HPP & Laba
+                def get_item_hpp_inner(row):
+                    info = hpp_lookup_map.get(row['Nama Produk'], {})
+                    return row['Jumlah Bersih'] * (info.get('HargaPokok', 0) / (info.get('Konversi', 1) or 1))
 
-            total_subtotal = int(settled_result['Subtotal'].sum())
-            total_biaya = int(settled_result['Total Biaya'].sum())
-            
-            # Hitung rincian per komponen biaya (hanya dari yang sudah settlement)
-            tot_adm = int(settled_result['Biaya Administrasi'].sum()) if 'Biaya Administrasi' in settled_result.columns else 0
-            tot_xtra = int(settled_result['Biaya Gratis Ongkir XTRA'].sum()) if 'Biaya Gratis Ongkir XTRA' in settled_result.columns else 0
-            tot_promo = int(settled_result['Biaya Promo XTRA'].sum()) if 'Biaya Promo XTRA' in settled_result.columns else 0
-            tot_sub_biaya = int(settled_result['Subtotal Biaya'].sum()) if 'Subtotal Biaya' in settled_result.columns else (tot_adm + tot_xtra + tot_promo)
-            tot_proses = int(settled_result['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in settled_result.columns else 0
-            tot_pajak = int(settled_result['Pajak'].sum()) if 'Pajak' in settled_result.columns else 0
+                if not settled.empty and hpp_lookup_map:
+                    s['total_hpp'] = int(round(settled.apply(get_item_hpp_inner, axis=1).sum()))
+                    s['laba_bersih'] = s['total_penghasilan'] - s['total_hpp']
+                    s['margin_laba'] = (s['laba_bersih'] / sub * 100) if sub > 0 else 0.0
+                    hpp_ratio = s['total_hpp'] / sub if sub > 0 else 0.0
+                    s['est_hpp_unsettled'] = int(round(s['unsettled_subtotal'] * hpp_ratio)) if s['unsettled_subtotal'] > 0 else 0
+                    s['total_hpp_proyeksi'] = s['total_hpp'] + s['est_hpp_unsettled']
+                else:
+                    s['total_hpp'] = 0
+                    s['laba_bersih'] = s['total_penghasilan']
+                    s['margin_laba'] = 0.0
+                    s['est_hpp_unsettled'] = 0
+                    s['total_hpp_proyeksi'] = 0
 
-            pct_adm = abs(tot_adm) / total_subtotal * 100 if total_subtotal > 0 else 0
-            pct_xtra = abs(tot_xtra) / total_subtotal * 100 if total_subtotal > 0 else 0
-            pct_promo = abs(tot_promo) / total_subtotal * 100 if total_subtotal > 0 else 0
-            pct_sub_biaya = abs(tot_sub_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
+                # Harian
+                s['avg_per_hari'] = s['total_penghasilan'] / n_days if n_days and n_days > 0 else None
 
-            # Hitung total penyesuaian
-            adj_orders_list = []
-            if not df_adj.empty:
-                active_orders = set(settled_result['No. Pesanan'].astype(str).unique())
-                relevant_adj = df_adj[df_adj['No. Pesanan'].astype(str).isin(active_orders)]
-                total_penyesuaian = int(relevant_adj['Biaya Penyesuaian'].sum()) if not relevant_adj.empty else 0
-                adj_orders_list = [o for o in relevant_adj['No. Pesanan'].unique().tolist() if o and str(o) != 'nan']
-            else:
-                total_penyesuaian = 0
-                relevant_adj = pd.DataFrame()
+                # Settlement counts
+                s['total_orders_valid'] = len(df_slice['No. Pesanan'].dropna().unique())
+                s['settled_count'] = len(settled['No. Pesanan'].dropna().unique()) if not settled.empty else 0
+                s['unsettled_count'] = len(unsettled['No. Pesanan'].dropna().unique()) if not unsettled.empty else 0
+                s['settle_rate'] = (s['settled_count'] / s['total_orders_valid'] * 100) if s['total_orders_valid'] > 0 else 100.0
+                s['unsettled_list'] = sorted(unsettled['No. Pesanan'].dropna().unique().tolist()) if not unsettled.empty else []
 
-            total_penghasilan = total_subtotal + total_biaya + total_penyesuaian
-            pct_biaya = abs(total_biaya) / total_subtotal * 100 if total_subtotal > 0 else 0
+                return s
 
-            # ─── Perhitungan Estimasi Potensi Penghasilan dari Unsettled Orders ───
-            unsettled_result = filtered_result[filtered_result['Is_Settled'] == False].copy() if 'Is_Settled' in filtered_result.columns else pd.DataFrame()
-            unsettled_subtotal = int(unsettled_result['Subtotal'].sum()) if not unsettled_result.empty else 0
-            
-            global_fee_ratio = (abs(total_biaya) / total_subtotal) if total_subtotal > 0 else 0.15
-            
-            if not unsettled_result.empty and not settled_result.empty:
-                prod_fee_stats = settled_result.groupby('Nama Produk').apply(
-                    lambda g: (abs(g['Total Biaya'].sum()) / g['Subtotal'].sum()) if g['Subtotal'].sum() > 0 else global_fee_ratio,
-                    include_groups=False
-                ).to_dict()
-
-                def est_row_net(row):
-                    p_name = row['Nama Produk']
-                    sub = row['Subtotal']
-                    fee_rate = prod_fee_stats.get(p_name, global_fee_ratio)
-                    return sub * (1 - fee_rate)
-
-                unsettled_result['Est_Net'] = unsettled_result.apply(est_row_net, axis=1)
-                est_unsettled_net = int(round(unsettled_result['Est_Net'].sum()))
-                effective_fee_ratio = (1 - (est_unsettled_net / unsettled_subtotal)) if unsettled_subtotal > 0 else global_fee_ratio
-            else:
-                effective_fee_ratio = global_fee_ratio
-                est_unsettled_net = int(unsettled_subtotal * (1 - effective_fee_ratio))
-            
-            total_proyeksi_keseluruhan = total_penghasilan + est_unsettled_net
-
-            # ─── Perhitungan HPP & Laba Bersih Toko (Multi-Satuan) ───
+            # ─── HPP Lookup (dipakai untuk kedua ringkasan) ───
             hpp_source = uploaded_hpp if uploaded_hpp is not None else None
             if hpp_source is not None:
                 hpp_source.seek(0)
             df_hpp_master = load_hpp_master(file_source=hpp_source)
             all_unique_prods = result['Nama Produk'].dropna().unique().tolist()
             mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
-            
             hpp_by_key = {r['ItemKey']: r.to_dict() for _, r in df_hpp_master.iterrows()}
-            hpp_lookup = {}
-            for p_name, item_key in mapping_dict.items():
-                if item_key in hpp_by_key:
-                    hpp_lookup[p_name] = hpp_by_key[item_key]
-
-            def get_item_hpp(row):
-                p_name = row['Nama Produk']
-                qty = row['Jumlah Bersih']
-                info = hpp_lookup.get(p_name, {})
-                harga = info.get('HargaPokok', 0)
-                konv = info.get('Konversi', 1) or 1
-                return qty * (harga / konv)
-
-            if not settled_result.empty and hpp_lookup:
-                total_hpp_settled = int(round(settled_result.apply(get_item_hpp, axis=1).sum()))
-                laba_bersih_settled = total_penghasilan - total_hpp_settled
-                margin_laba_settled = (laba_bersih_settled / total_subtotal * 100) if total_subtotal > 0 else 0.0
-
-                hpp_ratio = total_hpp_settled / total_subtotal if total_subtotal > 0 else 0.0
-                est_hpp_unsettled = int(round(unsettled_subtotal * hpp_ratio)) if unsettled_subtotal > 0 else 0
-                total_hpp_proyeksi = total_hpp_settled + est_hpp_unsettled
-            else:
-                total_hpp_settled = 0
-                laba_bersih_settled = total_penghasilan
-                margin_laba_settled = 0.0
-                total_hpp_proyeksi = 0
-                est_hpp_unsettled = 0
+            hpp_lookup = {p: hpp_by_key[k] for p, k in mapping_dict.items() if k in hpp_by_key}
 
             proc_start = st.session_state.get('processed_start_date')
             proc_end = st.session_state.get('processed_end_date')
-            if proc_start and proc_end:
-                num_days = (proc_end - proc_start).days + 1
-            else:
-                num_days = None
-            avg_per_hari = total_penghasilan / num_days if num_days and num_days > 0 else None
+            num_days = (proc_end - proc_start).days + 1 if proc_start and proc_end else None
+
+            def format_period_label(start_date, end_date):
+                """Format rentang tanggal singkat untuk konteks ringkasan global."""
+                if not start_date or not end_date:
+                    return "Semua tanggal yang diproses"
+
+                month_names = [
+                    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+                    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+                ]
+                if start_date.year == end_date.year and start_date.month == end_date.month:
+                    return f"{start_date.day}–{end_date.day} {month_names[start_date.month - 1]} {start_date.year}"
+                return (
+                    f"{start_date.day} {month_names[start_date.month - 1]} {start_date.year} "
+                    f"– {end_date.day} {month_names[end_date.month - 1]} {end_date.year}"
+                )
+
+            period_label = format_period_label(proc_start, proc_end)
+
+            # ─── Filter: kontrol di posisi ini agar filtered_result tersedia untuk ringkasan ───
+            # (Tapi filter hanya mempengaruhi tabel dan mini-ringkasan, BUKAN ringkasan global)
+            filter_options = st.session_state.get('filter_options', {})
+            allowed_filters = ['No. Pesanan', 'Nama Produk']
+            available_filters = [col for col in allowed_filters if col in result.columns]
+            # Simpan nilai filter sebelumnya di session_state agar konsisten saat rerun
+            if 'tbl_filter_col_val' not in st.session_state:
+                st.session_state['tbl_filter_col_val'] = available_filters[0] if available_filters else None
+            if 'tbl_filter_selected' not in st.session_state:
+                st.session_state['tbl_filter_selected'] = []
+
+            # ─── Kalkulasi ringkasan GLOBAL (seluruh periode, tidak terpengaruh filter) ───
+            g = calc_summary(result, df_adj, hpp_lookup, num_days)
+            settled_result = g['settled_result']     # Dipakai oleh downstream (adj, product summary)
+            unsettled_result = g['unsettled_result']
+            relevant_adj = g['relevant_adj']
+            adj_orders_list = g['adj_orders_list']
+            total_penghasilan = g['total_penghasilan']
+            total_subtotal = g['total_subtotal']
+            total_biaya = g['total_biaya']
+            pct_biaya = g['pct_biaya']
+            total_penyesuaian = g['total_penyesuaian']
+            unsettled_subtotal = g['unsettled_subtotal']
+            est_unsettled_net = g['est_unsettled_net']
+            effective_fee_ratio = g['effective_fee_ratio']
+            total_proyeksi_keseluruhan = g['total_proyeksi']
+            total_hpp_settled = g['total_hpp']
+            laba_bersih_settled = g['laba_bersih']
+            margin_laba_settled = g['margin_laba']
+            est_hpp_unsettled = g['est_hpp_unsettled']
+            total_hpp_proyeksi = g['total_hpp_proyeksi']
+            avg_per_hari = g['avg_per_hari']
             avg_per_hari_fmt = f"Rp {avg_per_hari:,.0f}" if avg_per_hari is not None else ""
+            tot_adm = g['tot_adm']
+            tot_xtra = g['tot_xtra']
+            tot_promo = g['tot_promo']
+            tot_sub_biaya = g['tot_sub_biaya']
+            tot_proses = g['tot_proses']
+            tot_pajak = g['tot_pajak']
+            pct_adm = g['pct_adm']
+            pct_xtra = g['pct_xtra']
+            pct_promo = g['pct_promo']
+            pct_sub_biaya = g['pct_sub_biaya']
+            total_orders_valid = g['total_orders_valid']
+            settled_count = g['settled_count']
+            unsettled_count = g['unsettled_count']
+            settle_rate = g['settle_rate']
+            unsettled_list = g['unsettled_list']
 
-            st.subheader("💰 Ringkasan Rekonsiliasi")
+            # filtered_result = result sementara (dipakai oleh tabel di bawah)
+            filtered_result = result.copy()
+            if 'No.' in filtered_result.columns:
+                filtered_result = filtered_result.drop(columns=['No.'])
+            filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
 
-            # ─── Group 1: Status & Rasio Settlement (Dihitung Langsung dari Hasil Filter Aktif) ───
-            total_orders_valid = len(filtered_result['No. Pesanan'].dropna().unique())
-            settled_count = len(settled_result['No. Pesanan'].dropna().unique()) if not settled_result.empty else 0
-            unsettled_count = len(unsettled_result['No. Pesanan'].dropna().unique()) if not unsettled_result.empty else 0
-            settle_rate = (settled_count / total_orders_valid * 100) if total_orders_valid > 0 else 100.0
-            unsettled_list = sorted(unsettled_result['No. Pesanan'].dropna().unique().tolist()) if not unsettled_result.empty else []
-
-            settle_color = "#4ade80" if settle_rate == 100 else ("#facc15" if settle_rate >= 80 else "#f87171")
-            settle_pct_color = "#86efac" if settle_rate == 100 else ("#fde047" if settle_rate >= 80 else "#fca5a5")
 
             # ─── Group 2: Realisasi Settled (Dana Sudah Cair) ───
             gross_pct_label = "Subtotal Penjualan (Gross)"
@@ -508,6 +540,7 @@ if menu == "📊 Rekonsiliasi Shopee":
 
             # ─── Render HTML Terstruktur Berdasarkan Settlement ───
             st.markdown("### 💰 Ringkasan Finansial Rekonsiliasi")
+            st.caption(f"{period_label} · Semua Produk · Ringkasan periode ini tidak berubah saat tabel difilter.")
 
             # Bagian 1: Realisasi Pesanan Selesai (Settled)
             settled_cards_html = gross_card + fees_card + adj_card + net_card + hpp_card + laba_card + daily_card
@@ -601,8 +634,94 @@ if menu == "📊 Rekonsiliasi Shopee":
                 </div>
                 """, unsafe_allow_html=True)
 
-            # ─── Tabel Detail Produk ───
+            # ─── Filter & Mini-Ringkasan Filter (Di Atas Tabel) ───
             st.subheader("📋 Detail Data Transaksi & Produk")
+
+            f_col1, f_col2 = st.columns([1, 2])
+            with f_col1:
+                filter_col = st.selectbox("🔍 Filter berdasarkan:", available_filters, key="tbl_filter_col") if available_filters else None
+            with f_col2:
+                if filter_col:
+                    unique_values = filter_options.get(filter_col, sorted(result[filter_col].dropna().astype(str).unique().tolist()))
+                    selected_values = st.multiselect(f"Pilih nilai:", unique_values, default=[], key="tbl_filter_val", placeholder=f"Semua {filter_col}...")
+                else:
+                    selected_values = []
+
+            if selected_values and filter_col:
+                filtered_result = result[result[filter_col].astype(str).isin([str(v) for v in selected_values])].copy()
+                if 'No.' in filtered_result.columns:
+                    filtered_result = filtered_result.drop(columns=['No.'])
+                filtered_result.insert(0, 'No.', range(1, len(filtered_result) + 1))
+
+                # ─── Mini-Ringkasan Filter: hanya muncul saat filter aktif ───
+                f_label = ', '.join([str(v) for v in selected_values[:3]])
+                if len(selected_values) > 3:
+                    f_label += f" +{len(selected_values)-3} lainnya"
+                filt_g = calc_summary(filtered_result, df_adj, hpp_lookup, num_days)
+
+                filt_settled = filt_g['settled_result']
+                filt_total_rows = len(filtered_result)
+                filt_sub = filt_g['total_subtotal']
+                filt_biaya = filt_g['total_biaya']
+                filt_net = filt_g['total_penghasilan']
+                filt_hpp = filt_g['total_hpp']
+                filt_laba = filt_g['laba_bersih']
+                filt_margin = filt_g['margin_laba']
+                filt_laba_color = "#10b981" if filt_laba >= 0 else "#f87171"
+                filt_product_count = filtered_result['Nama Produk'].dropna().nunique() if 'Nama Produk' in filtered_result.columns else 0
+
+                filt_cards = (
+                    '<div class="summary-card card-gross">'
+                    f'<div class="label">Subtotal (Gross)</div>'
+                    f'<div class="value">Rp {filt_sub:,.0f}</div>'
+                    '<div class="pct">Penjualan Produk Filtered</div>'
+                    '</div>'
+                    '<div class="summary-card card-fees">'
+                    f'<div class="label">Total Biaya</div>'
+                    f'<div class="value">Rp {filt_biaya:,.0f}</div>'
+                    f'<div class="pct">{filt_g["pct_biaya"]:.1f}% dari Subtotal</div>'
+                    '</div>'
+                    '<div class="summary-card card-net">'
+                    '<div class="label">Penghasilan Bersih</div>'
+                    f'<div class="value">Rp {filt_net:,.0f}</div>'
+                    '<div class="pct">Settled</div>'
+                    '</div>'
+                )
+                if filt_hpp > 0:
+                    filt_cards += (
+                        '<div class="summary-card card-hpp">'
+                        '<div class="label">Total HPP</div>'
+                        f'<div class="value">Rp {filt_hpp:,.0f}</div>'
+                        '</div>'
+                        '<div class="summary-card card-laba">'
+                        '<div class="label">Laba Bersih</div>'
+                        f'<div class="value" style="color:{filt_laba_color};">Rp {filt_laba:,.0f}</div>'
+                        f'<div class="pct">Margin: {filt_margin:.1f}%</div>'
+                        '</div>'
+                        '<div class="summary-card card-laba">'
+                        '<div class="label">Margin Laba</div>'
+                        f'<div class="value" style="color:{filt_laba_color};">{filt_margin:.1f}%</div>'
+                        '<div class="pct">Laba bersih ÷ subtotal settled</div>'
+                        '</div>'
+                    )
+
+                filt_n_ord = filt_g['total_orders_valid']
+                filt_n_settled = filt_g['settled_count']
+                st.markdown(
+                    f'<div class="section-group" style="border-color:rgba(99,102,241,0.35);background:rgba(30,27,75,0.55);">'
+                    '<div class="section-header">'
+                    f'<div class="section-title"><span>🔍</span> Ringkasan Filter: <em style="color:#a5b4fc;">{f_label}</em></div>'
+                    f'<div class="section-badge" style="background:rgba(99,102,241,0.18);color:#c7d2fe;border:1px solid rgba(99,102,241,0.35);">'
+                    f'{filt_product_count} produk · {filt_total_rows} transaksi · {filt_n_settled}/{filt_n_ord} pesanan settled</div>'
+                    '</div>'
+                    f'<div class="summary-container">{filt_cards}</div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                selected_values = []
+
+
             legends = []
             if 'Returned quantity' in filtered_result.columns and (filtered_result['Returned quantity'] > 0).any():
                 legends.append("🟡 **Kuning**: Retur / Penyesuaian (Returned quantity > 0)")
