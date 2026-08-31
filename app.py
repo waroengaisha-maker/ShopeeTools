@@ -120,17 +120,51 @@ html, body, [class*="css"] {
     margin-top: 0.15rem;
 }
 
-/* Tag / Highlight */
-.adj-badge {
-    display: inline-block;
-    background: rgba(234, 179, 8, 0.15);
-    color: #facc15;
-    border: 1px solid rgba(234, 179, 8, 0.35);
-    padding: 0.2rem 0.5rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
+/* Section Grouping */
+.section-group {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1.5rem;
+}
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.section-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.section-badge {
+    font-size: 0.78rem;
     font-weight: 600;
-    margin: 0.2rem 0.3rem 0.2rem 0;
+    padding: 0.2rem 0.65rem;
+    border-radius: 20px;
+    letter-spacing: 0.02em;
+}
+.badge-settled {
+    background: rgba(16, 185, 129, 0.18);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.badge-pending {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fde68a;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.badge-grand {
+    background: rgba(45, 212, 191, 0.18);
+    color: #99f6e4;
+    border: 1px solid rgba(45, 212, 191, 0.35);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -358,12 +392,23 @@ if menu == "📊 Rekonsiliasi Shopee":
 
             st.subheader("💰 Ringkasan Rekonsiliasi")
 
+            # ─── Group 1: Status & Rasio Settlement (Dihitung Langsung dari Hasil Filter Aktif) ───
+            total_orders_valid = len(filtered_result['No. Pesanan'].dropna().unique())
+            settled_count = len(settled_result['No. Pesanan'].dropna().unique()) if not settled_result.empty else 0
+            unsettled_count = len(unsettled_result['No. Pesanan'].dropna().unique()) if not unsettled_result.empty else 0
+            settle_rate = (settled_count / total_orders_valid * 100) if total_orders_valid > 0 else 100.0
+            unsettled_list = sorted(unsettled_result['No. Pesanan'].dropna().unique().tolist()) if not unsettled_result.empty else []
+
+            settle_color = "#4ade80" if settle_rate == 100 else ("#facc15" if settle_rate >= 80 else "#f87171")
+            settle_pct_color = "#86efac" if settle_rate == 100 else ("#fde047" if settle_rate >= 80 else "#fca5a5")
+
+            # ─── Group 2: Realisasi Settled (Dana Sudah Cair) ───
             gross_pct_label = "Subtotal Penjualan (Gross)"
             gross_card = (
                 '<div class="summary-card card-gross">'
                 f'<div class="label">{gross_pct_label}</div>'
                 f'<div class="value">Rp {total_subtotal:,.0f}</div>'
-                '<div class="pct">Nilai Penjualan Produk</div>'
+                '<div class="pct">Nilai Penjualan Produk Settled</div>'
                 '</div>'
             )
             fees_card = (
@@ -386,23 +431,11 @@ if menu == "📊 Rekonsiliasi Shopee":
                 )
             net_card = (
                 '<div class="summary-card card-net">'
-                '<div class="label">Penghasilan Bersih (Settled)</div>'
+                '<div class="label">Penghasilan Bersih (Net)</div>'
                 f'<div class="value">Rp {total_penghasilan:,.0f}</div>'
                 '<div class="pct">Dana Sudah Dilepas Shopee</div>'
                 '</div>'
             )
-
-            # Statistik Settlement
-            settle_stats = st.session_state.get('settlement_stats', {})
-            settled_count = settle_stats.get('settled_orders', len(settled_result['No. Pesanan'].unique()))
-            unsettled_count = settle_stats.get('unsettled_orders', 0)
-            total_orders_valid = settle_stats.get('total_orders', settled_count + unsettled_count)
-            settle_rate = settle_stats.get('settle_rate', 100.0)
-            unsettled_list = settle_stats.get('unsettled_list', [])
-
-            settle_color = "#4ade80" if settle_rate == 100 else ("#facc15" if settle_rate >= 80 else "#f87171")
-            settle_pct_color = "#86efac" if settle_rate == 100 else ("#fde047" if settle_rate >= 80 else "#fca5a5")
-
             hpp_card = ""
             laba_card = ""
             if total_hpp_settled > 0:
@@ -416,14 +449,27 @@ if menu == "📊 Rekonsiliasi Shopee":
                 laba_color = "#10b981" if laba_bersih_settled >= 0 else "#f87171"
                 laba_card = (
                     '<div class="summary-card card-laba">'
-                    '<div class="label">Laba Bersih Real (Net Profit)</div>'
+                    '<div class="label">Laba Bersih Real (Profit)</div>'
                     f'<div class="value" style="color: {laba_color};">Rp {laba_bersih_settled:,.0f}</div>'
                     f'<div class="pct">Margin Bersih: {margin_laba_settled:.1f}%</div>'
                     '</div>'
                 )
+            daily_card = ""
+            if avg_per_hari is not None:
+                daily_card = (
+                    '<div class="summary-card card-daily">'
+                    '<div class="label">Penghasilan Real / Hari</div>'
+                    f'<div class="value">{avg_per_hari_fmt}</div>'
+                    f'<div class="pct">Real Settled ({num_days} hari)</div>'
+                    '</div>'
+                )
 
+            # ─── Group 3: Estimasi Pending & Total Proyeksi ───
             potential_card = ""
             grand_total_card = ""
+            laba_proyeksi_card = ""
+            daily_proj_card = ""
+
             if not unsettled_result.empty:
                 potential_card = (
                     '<div class="summary-card card-potential">'
@@ -439,63 +485,56 @@ if menu == "📊 Rekonsiliasi Shopee":
                     '<div class="pct">Settled + Estimasi Pending</div>'
                     '</div>'
                 )
-            laba_proyeksi_card = ""
-            if not unsettled_result.empty and total_hpp_proyeksi > 0:
-                laba_proyeksi = total_proyeksi_keseluruhan - total_hpp_proyeksi
-                margin_proyeksi = (laba_proyeksi / total_proyeksi_keseluruhan * 100) if total_proyeksi_keseluruhan > 0 else 0.0
-                laba_proj_color = "#10b981" if laba_proyeksi >= 0 else "#f87171"
-                laba_proyeksi_card = (
-                    '<div class="summary-card card-laba">'
-                    '<div class="label">Proyeksi Laba Bersih</div>'
-                    f'<div class="value" style="color: {laba_proj_color};">Rp {laba_proyeksi:,.0f}</div>'
-                    f'<div class="pct">Margin Proyeksi: {margin_proyeksi:.1f}% | Est. HPP Pending: Rp {est_hpp_unsettled:,.0f}</div>'
-                    '</div>'
-                )
+                if total_hpp_proyeksi > 0:
+                    laba_proyeksi = total_proyeksi_keseluruhan - total_hpp_proyeksi
+                    margin_proyeksi = (laba_proyeksi / total_proyeksi_keseluruhan * 100) if total_proyeksi_keseluruhan > 0 else 0.0
+                    laba_proj_color = "#10b981" if laba_proyeksi >= 0 else "#f87171"
+                    laba_proyeksi_card = (
+                        '<div class="summary-card card-laba">'
+                        '<div class="label">Proyeksi Laba Bersih</div>'
+                        f'<div class="value" style="color: {laba_proj_color};">Rp {laba_proyeksi:,.0f}</div>'
+                        f'<div class="pct">Margin Proyeksi: {margin_proyeksi:.1f}% | Est. HPP Pending: Rp {est_hpp_unsettled:,.0f}</div>'
+                        '</div>'
+                    )
+                if avg_per_hari is not None:
+                    avg_proj_per_hari = total_proyeksi_keseluruhan / num_days if num_days and num_days > 0 else total_proyeksi_keseluruhan
+                    daily_proj_card = (
+                        '<div class="summary-card card-grand">'
+                        '<div class="label">Proyeksi Bersih / Hari</div>'
+                        f'<div class="value">Rp {avg_proj_per_hari:,.0f}</div>'
+                        f'<div class="pct">Proyeksi Total ({num_days} hari)</div>'
+                        '</div>'
+                    )
 
-            daily_card = ""
-            daily_proj_card = ""
-            if avg_per_hari is not None:
-                daily_card = (
-                    '<div class="summary-card card-daily">'
-                    '<div class="label">Penghasilan Real / Hari</div>'
-                    f'<div class="value">{avg_per_hari_fmt}</div>'
-                    f'<div class="pct">Real Settled ({num_days} hari)</div>'
-                    '</div>'
-                )
-                avg_proj_per_hari = total_proyeksi_keseluruhan / num_days if num_days and num_days > 0 else total_proyeksi_keseluruhan
-                daily_proj_card = (
-                    '<div class="summary-card card-grand">'
-                    '<div class="label">Proyeksi Bersih / Hari</div>'
-                    f'<div class="value">Rp {avg_proj_per_hari:,.0f}</div>'
-                    f'<div class="pct">Proyeksi Total ({num_days} hari)</div>'
-                    '</div>'
-                )
+            # ─── Render HTML Terstruktur Berdasarkan Settlement ───
+            st.markdown("### 💰 Ringkasan Finansial Rekonsiliasi")
 
-            settle_card = (
-                '<div class="summary-card card-settle">'
-                '<div class="label">Status Settlement</div>'
-                f'<div class="value" style="color: {settle_color};">{settle_rate:.1f}%</div>'
-                f'<div class="pct" style="color: {settle_pct_color};">{settled_count}/{total_orders_valid} pesanan selesai</div>'
+            # Bagian 1: Realisasi Pesanan Selesai (Settled)
+            settled_cards_html = gross_card + fees_card + adj_card + net_card + hpp_card + laba_card + daily_card
+            settled_html = (
+                '<div class="section-group">'
+                '<div class="section-header">'
+                '<div class="section-title"><span>✅</span> Realisasi Penjualan & Laba Selesai (Settled)</div>'
+                f'<div class="section-badge badge-settled">{settled_count}/{total_orders_valid} Pesanan Cair ({settle_rate:.1f}%)</div>'
+                '</div>'
+                f'<div class="summary-container">{settled_cards_html}</div>'
                 '</div>'
             )
+            st.markdown(settled_html, unsafe_allow_html=True)
 
-            summary_html = (
-                '<div class="summary-container">'
-                + gross_card
-                + fees_card
-                + adj_card
-                + net_card
-                + hpp_card
-                + laba_card
-                + potential_card
-                + grand_total_card
-                + laba_proyeksi_card
-                + daily_card
-                + daily_proj_card
-                + settle_card
-                + '</div>'
-            )
-            st.markdown(summary_html, unsafe_allow_html=True)
+            # Bagian 2: Estimasi Pending & Proyeksi Keseluruhan (Hanya jika ada unsettled)
+            if not unsettled_result.empty:
+                pending_cards_html = potential_card + grand_total_card + laba_proyeksi_card + daily_proj_card
+                pending_html = (
+                    '<div class="section-group">'
+                    '<div class="section-header">'
+                    '<div class="section-title"><span>⏳</span> Estimasi Pending & Total Proyeksi Toko</div>'
+                    f'<div class="section-badge badge-pending">{unsettled_count} Pesanan Belum Settlement (Dana Tertahan)</div>'
+                    '</div>'
+                    f'<div class="summary-container">{pending_cards_html}</div>'
+                    '</div>'
+                )
+                st.markdown(pending_html, unsafe_allow_html=True)
 
             # ─── Rincian Komponen Biaya ───
             with st.expander("📊 Rincian Detail Komponen Biaya", expanded=True):
