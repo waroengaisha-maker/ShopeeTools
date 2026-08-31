@@ -1143,12 +1143,13 @@ if menu == "dashboard":
             unsafe_allow_html=True,
         )
 
-        st.markdown('<div class="section-parent-card"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
+        settled_section = st.container(border=True)
+        settled_section.markdown('<div class="section-parent-card"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
 
         # KPI utama pesanan settled
         if 'result' in st.session_state:
             laba_kpi_color = "#10b981" if laba_bersih >= 0 else "#f87171"
-            st.markdown(
+            settled_section.markdown(
                 f"""
                 <div class="kpi-grid">
                     <div class="kpi-card kpi-gross">
@@ -1186,9 +1187,10 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="section-parent-card"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
+            projection_section = st.container(border=True)
+            projection_section.markdown('<div class="section-parent-card"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
             pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
-            st.markdown(
+            projection_section.markdown(
                 f"""
                 <div class="section-card-grid projection-card-grid">
                     <div class="section-metric-card metric-amber"><span class="label">Pending</span><div class="value">{total_pending:,}</div><div class="sub">Belum settlement</div></div>
@@ -1208,7 +1210,8 @@ if menu == "dashboard":
                 end_date=proc_end,
                 settled_fee_ratio=(abs(total_biaya) / total_omzet if total_omzet > 0 else 0.0),
             )
-            st.markdown('<div class="section-parent-card"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
+            anomaly_section = st.container(border=True)
+            anomaly_section.markdown('<div class="section-parent-card"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
                 st.warning(
                     f"Terdapat {cancelled_summary['count']:,} pesanan dibatalkan "
@@ -1218,7 +1221,7 @@ if menu == "dashboard":
                 )
             else:
                 st.success("Tidak ada pesanan dibatalkan pada periode ini.", icon="✅")
-            st.markdown(
+            anomaly_section.markdown(
                 f"""
                 <div class="section-card-grid risk-card-grid">
                     <div class="section-metric-card metric-red">
@@ -1245,9 +1248,9 @@ if menu == "dashboard":
                 """,
                 unsafe_allow_html=True,
             )
-            st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+            anomaly_section.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
             if cancelled_summary.get('by_type'):
-                st.markdown("#### Estimasi Penghasilan Hilang berdasarkan Tipe Pembatalan")
+                anomaly_section.markdown("#### Estimasi Penghasilan Hilang berdasarkan Tipe Pembatalan")
                 type_cards = ''.join(
                     f'''<div class="section-metric-card metric-blue">
                         <span class="label">{html.escape(str(item['type']))}</span>
@@ -1256,9 +1259,9 @@ if menu == "dashboard":
                     </div>'''
                     for item in cancelled_summary['by_type']
                 )
-                st.markdown(f'<div class="section-card-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">{type_cards}</div>', unsafe_allow_html=True)
+                anomaly_section.markdown(f'<div class="section-card-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">{type_cards}</div>', unsafe_allow_html=True)
             cancelled_details = cancelled_summary.get('details', pd.DataFrame())
-            with st.expander("Lihat detail transaksi dibatalkan", expanded=False):
+            with anomaly_section.expander("Lihat detail transaksi dibatalkan", expanded=False):
                 if cancelled_details.empty:
                     st.info("Detail transaksi pembatalan tidak tersedia.")
                 else:
