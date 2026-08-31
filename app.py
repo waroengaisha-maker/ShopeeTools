@@ -274,13 +274,12 @@ def _find_session_order_file():
 
 def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None):
     """Menghitung pesanan batal dari file Order, di luar KPI finansial settled."""
-    empty_summary = {'count': 0, 'value': 0, 'rate': 0.0}
+    empty_summary = {'count': 0, 'value': 0, 'rate': 0.0, 'details': pd.DataFrame()}
     if not order_file_path or not Path(order_file_path).exists():
         return empty_summary
 
     try:
-        usecols = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Pesanan', 'Jumlah', 'Harga Setelah Diskon']
-        order_df = pd.read_excel(order_file_path, sheet_name='orders', usecols=usecols)
+        order_df = pd.read_excel(order_file_path, sheet_name='orders')
         order_df['Waktu Pesanan Dibuat'] = pd.to_datetime(order_df['Waktu Pesanan Dibuat'], errors='coerce')
         if start_date is not None:
             order_df = order_df[order_df['Waktu Pesanan Dibuat'] >= pd.to_datetime(start_date).normalize()]
@@ -303,10 +302,40 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
             price = pd.to_numeric(price, errors='coerce').fillna(0)
         quantity = pd.to_numeric(cancelled['Jumlah'], errors='coerce').fillna(0)
         cancelled_value = int((price * quantity).sum())
+        type_candidates = [
+            'Tipe Pembatalan', 'Jenis Pembatalan', 'Alasan Pembatalan',
+            'Alasan Pembatalan Pesanan', 'Cancellation Type',
+            'Cancellation Reason', 'Alasan Batal',
+        ]
+        type_col = next((col for col in type_candidates if col in cancelled.columns), None)
+
+        detail_columns = {
+            'Waktu Pesanan Dibuat': 'Waktu Pesanan Dibuat',
+            'No. Pesanan': 'No. Pesanan',
+            'No. Resi': 'No. Resi',
+            'Nama Produk': 'Nama Produk',
+            'Nama Variasi': 'Nama Variasi',
+            'Jumlah': 'Jumlah',
+            'Harga Setelah Diskon': 'Harga Setelah Diskon',
+        }
+        details = pd.DataFrame()
+        available = {label: col for label, col in detail_columns.items() if col in cancelled.columns}
+        if available:
+            details = cancelled[list(available.values())].rename(columns={v: k for k, v in available.items()}).copy()
+            details['Tipe Pembatalan'] = (
+                cancelled[type_col].map(lambda value: str(value).strip() if pd.notna(value) and str(value).strip() else 'Tidak tersedia')
+                if type_col else 'Tidak tersedia'
+            )
+            details = details.drop_duplicates(subset=['No. Pesanan'], keep='first')
+            details['Waktu Pesanan Dibuat'] = pd.to_datetime(details['Waktu Pesanan Dibuat'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+            if 'Harga Setelah Diskon' in details.columns:
+                details['Harga Setelah Diskon'] = pd.to_numeric(details['Harga Setelah Diskon'], errors='coerce').fillna(0).round(0).astype(int)
+            details = details.sort_values('Waktu Pesanan Dibuat', ascending=False, na_position='last')
         return {
             'count': int(cancelled_count),
             'value': cancelled_value,
             'rate': (cancelled_count / denominator * 100) if denominator > 0 else 0.0,
+            'details': details,
         }
     except Exception as exc:
         LOGGER.warning("Cancelled order summary failed for %s: %s", order_file_path, exc)
@@ -1154,6 +1183,22 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
             st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+            cancelled_details = cancelled_summary.get('details', pd.DataFrame())
+            with st.expander("Lihat detail transaksi dibatalkan", expanded=False):
+                if cancelled_details.empty:
+                    st.info("Detail transaksi pembatalan tidak tersedia.")
+                else:
+                    st.dataframe(
+                        cancelled_details,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'Harga Setelah Diskon': st.column_config.NumberColumn(
+                                'Harga Setelah Diskon', format='Rp %d'
+                            ),
+                        },
+                    )
+                    st.caption("Tipe pembatalan diambil dari kolom alasan/jenis pembatalan pada file Order. Satu baris mewakili satu nomor pesanan.")
 
             st.markdown("### Proyeksi Unsettled")
             st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
