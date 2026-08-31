@@ -13,10 +13,13 @@ from hpp_manager import (
 import io
 import hashlib
 import logging
+import pickle
 import re
 import shutil
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
@@ -158,6 +161,218 @@ def persist_session_order_upload(uploaded_file):
         st.session_state.uploaded_order_path = str(stored_path)
         st.session_state.uploaded_order_name = uploaded_file.name
     return raw_bytes
+
+
+def _get_session_result_path():
+    return SESSION_UPLOAD_DIR / "reconciliation_result.pkl"
+
+
+def _save_session_result():
+    payload = {
+        "result": st.session_state.get("result"),
+        "df_adjustments": st.session_state.get("df_adjustments"),
+        "filter_options": st.session_state.get("filter_options"),
+        "settlement_stats": st.session_state.get("settlement_stats"),
+        "processed_start_date": st.session_state.get("processed_start_date"),
+        "processed_end_date": st.session_state.get("processed_end_date"),
+        "processed_at": st.session_state.get("processed_at"),
+    }
+    result_path = _get_session_result_path()
+    try:
+        SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        with result_path.open("wb") as fh:
+            pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    except (PermissionError, OSError, pickle.PickleError) as exc:
+        LOGGER.warning("Failed to persist reconciliation result for %s: %s", _short_session_id(st.session_state.session_id), exc)
+
+
+def _load_session_result():
+    result_path = _get_session_result_path()
+    if not result_path.exists():
+        return False
+    try:
+        with result_path.open("rb") as fh:
+            payload = pickle.load(fh)
+    except (PermissionError, OSError, pickle.PickleError, EOFError, AttributeError, TypeError) as exc:
+        LOGGER.warning("Failed to load reconciliation result for %s: %s", _short_session_id(st.session_state.session_id), exc)
+        return False
+
+    if not isinstance(payload, dict) or "result" not in payload:
+        return False
+
+    for key, value in payload.items():
+        st.session_state[key] = value
+    return True
+
+
+def _format_processed_period(start_date, end_date):
+    if start_date and end_date:
+        if start_date.month == end_date.month and start_date.year == end_date.year:
+            month_names = [
+                "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+                "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+            ]
+            return f"{month_names[start_date.month - 1]} {start_date.year}"
+        return f"{start_date.strftime('%d %b %Y')} - {end_date.strftime('%d %b %Y')}"
+    return "-"
+
+
+def _get_status_retur_series(df):
+    if 'Returned quantity' in df.columns:
+        return df['Returned quantity'].fillna(0).astype(float).gt(0).map({True: 'Ada Retur', False: 'Tanpa Retur'})
+    return pd.Series(['Tanpa Retur'] * len(df), index=df.index)
+
+
+def _build_dashboard_filter_options(df):
+    options = {}
+    if 'Waktu Pesanan Dibuat' in df.columns:
+        month_series = pd.to_datetime(df['Waktu Pesanan Dibuat'], errors='coerce').dt.to_period('M')
+        options['Periode'] = sorted(month_series.dropna().astype(str).unique().tolist())
+    if 'Nama Produk' in df.columns:
+        options['Produk'] = sorted(df['Nama Produk'].dropna().astype(str).unique().tolist())
+    if 'Nama Variasi' in df.columns:
+        options['SKU'] = sorted(df['Nama Variasi'].dropna().astype(str).unique().tolist())
+    if 'Is_Settled' in df.columns:
+        options['Status Settlement'] = ['Settled', 'Belum Settlement']
+    if 'Returned quantity' in df.columns:
+        options['Status Retur'] = ['Ada Retur', 'Tanpa Retur']
+    return options
+
+
+def _apply_dashboard_filters(df, periode_vals, produk_vals, sku_vals, settlement_vals, retur_vals):
+    filtered = df.copy()
+    if periode_vals and 'Waktu Pesanan Dibuat' in filtered.columns:
+        month_series = pd.to_datetime(filtered['Waktu Pesanan Dibuat'], errors='coerce').dt.to_period('M').astype(str)
+        filtered = filtered[month_series.isin(periode_vals)]
+    if produk_vals and 'Nama Produk' in filtered.columns:
+        filtered = filtered[filtered['Nama Produk'].astype(str).isin([str(v) for v in produk_vals])]
+    if sku_vals and 'Nama Variasi' in filtered.columns:
+        filtered = filtered[filtered['Nama Variasi'].astype(str).isin([str(v) for v in sku_vals])]
+    if settlement_vals and 'Is_Settled' in filtered.columns:
+        settled_map = filtered['Is_Settled'].map({True: 'Settled', False: 'Belum Settlement'}).fillna('Belum Settlement')
+        filtered = filtered[settled_map.isin(settlement_vals)]
+    if retur_vals and 'Returned quantity' in filtered.columns:
+        retur_map = _get_status_retur_series(filtered)
+        filtered = filtered[retur_map.isin(retur_vals)]
+    return filtered
+
+
+def _build_hpp_lookup_for_dashboard(result_df, hpp_source=None):
+    df_hpp_master = load_hpp_master(file_source=hpp_source)
+    if result_df is None or result_df.empty or 'Nama Produk' not in result_df.columns:
+        return {}
+    all_unique_prods = result_df['Nama Produk'].dropna().unique().tolist()
+    mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
+    hpp_by_key = {r['ItemKey']: r.to_dict() for _, r in df_hpp_master.iterrows()}
+    return {p: hpp_by_key[k] for p, k in mapping_dict.items() if k in hpp_by_key}
+
+
+def _find_session_order_file():
+    if not SESSION_UPLOAD_DIR.exists():
+        return None
+    candidates = sorted(
+        [p for p in SESSION_UPLOAD_DIR.glob("order_*.xlsx") if p.is_file()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _compute_dashboard_kpis(result_df, hpp_lookup_map):
+    df = result_df.copy()
+    settled = df[df['Is_Settled'] == True].copy() if 'Is_Settled' in df.columns else df.copy()
+    unsettled = df[df['Is_Settled'] == False].copy() if 'Is_Settled' in df.columns else pd.DataFrame()
+
+    total_subtotal = int(settled['Subtotal'].sum()) if 'Subtotal' in settled.columns else 0
+    total_biaya = int(settled['Total Biaya'].sum()) if 'Total Biaya' in settled.columns else 0
+    total_penghasilan = int(settled['Subtotal'].sum()) + int(settled['Total Biaya'].sum()) if not settled.empty else 0
+
+    def get_item_hpp(row):
+        info = hpp_lookup_map.get(row.get('Nama Produk'), {})
+        harga_pokok = info.get('HargaPokok', 0)
+        konversi = info.get('Konversi', 1) or 1
+        return row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)
+
+    total_hpp = int(round(settled.apply(get_item_hpp, axis=1).sum())) if not settled.empty and hpp_lookup_map else 0
+    laba_bersih = total_penghasilan - total_hpp
+    margin_laba = (laba_bersih / total_penghasilan * 100) if total_penghasilan > 0 else 0.0
+    total_orders_valid = len(df['No. Pesanan'].dropna().unique()) if 'No. Pesanan' in df.columns else 0
+    settled_count = len(settled['No. Pesanan'].dropna().unique()) if not settled.empty and 'No. Pesanan' in settled.columns else 0
+    unsettled_count = len(unsettled['No. Pesanan'].dropna().unique()) if not unsettled.empty and 'No. Pesanan' in unsettled.columns else 0
+    settle_rate = (settled_count / total_orders_valid * 100) if total_orders_valid > 0 else 100.0
+    pending_count = unsettled_count
+
+    return {
+        'total_subtotal': total_subtotal,
+        'total_biaya': abs(total_biaya),
+        'total_penghasilan': total_penghasilan,
+        'total_hpp': total_hpp,
+        'laba_bersih': laba_bersih,
+        'margin_laba': margin_laba,
+        'total_orders_valid': total_orders_valid,
+        'settled_count': settled_count,
+        'unsettled_count': unsettled_count,
+        'settle_rate': settle_rate,
+        'pending_count': pending_count,
+    }
+
+
+def _build_daily_chart_data(order_file_path, result_df, hpp_lookup_map):
+    if not order_file_path or not Path(order_file_path).exists():
+        return pd.DataFrame()
+
+    try:
+        usecols = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Resi', 'No. Pesanan', 'Nama Produk', 'Nama Variasi']
+        df_order = pd.read_excel(order_file_path, sheet_name='orders', usecols=usecols)
+        df_order['Waktu Pesanan Dibuat'] = pd.to_datetime(df_order['Waktu Pesanan Dibuat'], errors='coerce')
+        df_order = df_order.dropna(subset=['Waktu Pesanan Dibuat'])
+        df_order = df_order[~df_order['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
+        df_order = df_order[df_order['No. Resi'].notna()]
+        if df_order.empty:
+            return pd.DataFrame()
+
+        if result_df is not None and not result_df.empty and 'No. Pesanan' in result_df.columns:
+            result_map = result_df.set_index('No. Pesanan')
+            settled_ids = set(result_df.loc[result_df['Is_Settled'] == True, 'No. Pesanan'].astype(str).unique()) if 'Is_Settled' in result_df.columns else set()
+        else:
+            result_map = None
+            settled_ids = set()
+
+        df_order['No. Pesanan'] = df_order['No. Pesanan'].astype(str)
+        daily_rows = []
+        for day, chunk in df_order.groupby(df_order['Waktu Pesanan Dibuat'].dt.date):
+            order_ids = chunk['No. Pesanan'].dropna().astype(str).unique().tolist()
+            if result_map is not None:
+                subset = result_df[result_df['No. Pesanan'].astype(str).isin(order_ids)].copy()
+            else:
+                subset = pd.DataFrame()
+            omzet = int(subset['Subtotal'].sum()) if not subset.empty and 'Subtotal' in subset.columns else 0
+            biaya = int(subset['Total Biaya'].sum()) if not subset.empty and 'Total Biaya' in subset.columns else 0
+            penghasilan = int(subset[subset['Is_Settled'] == True]['Subtotal'].sum() + subset[subset['Is_Settled'] == True]['Total Biaya'].sum()) if not subset.empty and 'Is_Settled' in subset.columns else omzet + biaya
+            hpp = 0
+            if not subset.empty and hpp_lookup_map and 'Nama Produk' in subset.columns:
+                def _row_hpp(row):
+                    info = hpp_lookup_map.get(row['Nama Produk'], {})
+                    harga_pokok = info.get('HargaPokok', 0)
+                    konversi = info.get('Konversi', 1) or 1
+                    return row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)
+                hpp = int(round(subset[subset['Is_Settled'] == True].apply(_row_hpp, axis=1).sum())) if 'Is_Settled' in subset.columns else 0
+            laba = penghasilan - hpp
+            daily_rows.append({
+                'Tanggal': pd.to_datetime(day),
+                'Omzet': omzet,
+                'HPP': hpp,
+                'Laba': laba,
+                'Penghasilan': penghasilan,
+            })
+
+        chart_df = pd.DataFrame(daily_rows).sort_values('Tanggal')
+        if not chart_df.empty:
+            chart_df['TanggalLabel'] = chart_df['Tanggal'].dt.strftime('%d %b').str.lstrip('0')
+        return chart_df
+    except Exception as exc:
+        LOGGER.warning("Daily chart build failed for %s: %s", order_file_path, exc)
+        return pd.DataFrame()
 
 # ─── Custom CSS untuk tampilan premium ───
 st.markdown("""
@@ -312,6 +527,104 @@ html, body, [class*="css"] {
     border: 1px solid rgba(45, 212, 191, 0.35);
 }
 
+.dashboard-hero {
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.88) 48%, rgba(17, 24, 39, 0.92) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 1.4rem 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.2);
+}
+.dashboard-kicker {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #93c5fd;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+}
+.dashboard-title {
+    font-size: 2rem;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #f8fafc;
+    margin-bottom: 0.55rem;
+}
+.dashboard-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+.dashboard-meta-card {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+}
+.dashboard-meta-card .label {
+    display: block;
+    font-size: 0.73rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    margin-bottom: 0.25rem;
+}
+.dashboard-meta-card .value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+.dashboard-meta-card.ok .value {
+    color: #6ee7b7;
+}
+.filter-panel {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0 1.2rem 0;
+}
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.85rem;
+    margin: 1rem 0 1.2rem 0;
+}
+.kpi-card {
+    padding: 1rem 1.05rem;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+.kpi-card .label {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    margin-bottom: 0.35rem;
+    font-weight: 700;
+}
+.kpi-card .value {
+    font-size: 1.45rem;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #f8fafc;
+}
+.kpi-card .pct {
+    font-size: 0.76rem;
+    color: #cbd5e1;
+    margin-top: 0.25rem;
+}
+.kpi-gross .value { color: #38bdf8; }
+.kpi-fee .value { color: #f87171; }
+.kpi-net .value { color: #4ade80; }
+.kpi-hpp .value { color: #f97316; }
+.kpi-profit .value { color: #10b981; }
+.kpi-margin .value { color: #c084fc; }
+
 /* Tautan navigasi dapat dibuka pada tab baru lewat Ctrl/Cmd+klik atau klik kanan. */
 .sidebar-nav-link {
     display: block;
@@ -380,7 +693,153 @@ with st.sidebar:
 # 🏠 MENU 1: DASHBOARD (belum ada konten)
 # ==============================================================================
 if menu == "dashboard":
-    pass
+    st.title("Dashboard Penjualan")
+    if 'result' not in st.session_state:
+        if _load_session_result():
+            st.rerun()
+        else:
+            st.info("Jalankan proses rekonsiliasi di menu Rekonsiliasi Shopee agar dashboard ini menampilkan data.")
+    else:
+        result = st.session_state.result
+        proc_start = st.session_state.get('processed_start_date')
+        proc_end = st.session_state.get('processed_end_date')
+        processed_at = st.session_state.get('processed_at')
+        if not isinstance(processed_at, datetime):
+            processed_at = datetime.now(ZoneInfo("Asia/Jakarta"))
+
+        period_text = _format_processed_period(proc_start, proc_end)
+        status_text = "✓ Order + Income berhasil diproses" if not result.empty else "Data belum tersedia"
+        last_processing_text = processed_at.astimezone(ZoneInfo("Asia/Jakarta")).strftime("%d %b %Y %H:%M")
+        hpp_source = st.session_state.get('uploaded_hpp_file') if 'uploaded_hpp_file' in st.session_state else None
+        if hpp_source is not None:
+            try:
+                hpp_source.seek(0)
+            except Exception:
+                pass
+        hpp_lookup = _build_hpp_lookup_for_dashboard(result, hpp_source=hpp_source)
+        kpi_g = _compute_dashboard_kpis(result, hpp_lookup)
+        total_pending = kpi_g['pending_count']
+        total_omzet = kpi_g['total_subtotal']
+        total_penghasilan = kpi_g['total_penghasilan']
+        total_biaya = kpi_g['total_biaya']
+        total_hpp = kpi_g['total_hpp']
+        laba_bersih = kpi_g['laba_bersih']
+        margin_laba = kpi_g['margin_laba']
+
+        st.markdown(
+            f"""
+            <div class="dashboard-hero">
+                <div class="dashboard-kicker">Dashboard Penjualan</div>
+                <div class="dashboard-title">DASHBOARD PENJUALAN</div>
+                <div class="dashboard-meta">
+                    <div class="dashboard-meta-card">
+                        <span class="label">Periode</span>
+                        <div class="value">{period_text}</div>
+                    </div>
+                    <div class="dashboard-meta-card ok">
+                        <span class="label">Status Data</span>
+                        <div class="value">{status_text}</div>
+                    </div>
+                    <div class="dashboard-meta-card">
+                        <span class="label">Last Processing</span>
+                        <div class="value">{last_processing_text}</div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # KPI utama paling atas
+        if 'result' in st.session_state:
+            laba_kpi_color = "#10b981" if laba_bersih >= 0 else "#f87171"
+            st.markdown(
+                f"""
+                <div class="kpi-grid">
+                    <div class="kpi-card kpi-gross">
+                        <span class="label">Omzet Kotor</span>
+                        <div class="value">Rp {total_omzet:,.0f}</div>
+                        <div class="pct">Subtotal penjualan settled</div>
+                    </div>
+                    <div class="kpi-card kpi-net">
+                        <span class="label">Penghasilan Bersih</span>
+                        <div class="value">Rp {total_penghasilan:,.0f}</div>
+                        <div class="pct">Setelah biaya Shopee & penyesuaian</div>
+                    </div>
+                    <div class="kpi-card kpi-fee">
+                        <span class="label">Total Biaya Shopee</span>
+                        <div class="value">Rp {total_biaya:,.0f}</div>
+                        <div class="pct">Fee layanan, admin, dan pajak</div>
+                    </div>
+                    <div class="kpi-card kpi-hpp">
+                        <span class="label">HPP</span>
+                        <div class="value">Rp {total_hpp:,.0f}</div>
+                        <div class="pct">Modal produk terjual</div>
+                    </div>
+                    <div class="kpi-card kpi-profit">
+                        <span class="label">Laba Bersih</span>
+                        <div class="value" style="color: {laba_kpi_color};">Rp {laba_bersih:,.0f}</div>
+                        <div class="pct">Penghasilan - HPP = Laba</div>
+                    </div>
+                    <div class="kpi-card kpi-margin">
+                        <span class="label">Pending</span>
+                        <div class="value">{total_pending}</div>
+                        <div class="pct">Pesanan belum settlement</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            daily_order_file = _find_session_order_file()
+            chart_df = _build_daily_chart_data(daily_order_file, result, hpp_lookup)
+            if not chart_df.empty:
+                st.markdown("### Grafik Omzet vs HPP vs Laba")
+                st.caption("Per hari untuk melihat hari yang omzetnya tinggi tetapi labanya ternyata tipis.")
+                chart_view = chart_df.set_index('TanggalLabel')[['Omzet', 'HPP', 'Laba']]
+                st.line_chart(chart_view, height=320)
+                with st.expander("Lihat data harian", expanded=False):
+                    st.dataframe(
+                        chart_df[['TanggalLabel', 'Omzet', 'HPP', 'Laba', 'Penghasilan']],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+        filter_options = _build_dashboard_filter_options(result)
+        filter_labels = {
+            "Periode": "Periode",
+            "Produk": "Produk",
+            "SKU": "SKU",
+            "Status Settlement": "Status Settlement",
+            "Status Retur": "Status Retur",
+        }
+
+        st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
+        st.subheader("Filter")
+        c1, c2, c3 = st.columns(3)
+        c4, c5 = st.columns(2)
+
+        with c1:
+            periode_vals = st.multiselect(filter_labels["Periode"], filter_options.get("Periode", []), key="dash_filter_periode")
+        with c2:
+            produk_vals = st.multiselect(filter_labels["Produk"], filter_options.get("Produk", []), key="dash_filter_produk")
+        with c3:
+            sku_vals = st.multiselect(filter_labels["SKU"], filter_options.get("SKU", []), key="dash_filter_sku")
+        with c4:
+            settlement_vals = st.multiselect(filter_labels["Status Settlement"], filter_options.get("Status Settlement", []), key="dash_filter_settlement")
+        with c5:
+            retur_vals = st.multiselect(filter_labels["Status Retur"], filter_options.get("Status Retur", []), key="dash_filter_retur")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        dashboard_filtered = _apply_dashboard_filters(result, periode_vals, produk_vals, sku_vals, settlement_vals, retur_vals)
+        st.caption(f"Menampilkan {len(dashboard_filtered)} baris dari {len(result)} baris data.")
+
+        display_df = dashboard_filtered.copy()
+        if 'No.' in display_df.columns:
+            display_df = display_df.drop(columns=['No.'])
+        display_df.insert(0, 'No.', range(1, len(display_df) + 1))
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 # ==============================================================================
@@ -451,6 +910,8 @@ elif menu == "reconciliation":
                 )
                 st.session_state.processed_start_date = start_date
                 st.session_state.processed_end_date = end_date
+                st.session_state.processed_at = datetime.now(ZoneInfo("Asia/Jakarta"))
+                _save_session_result()
 
             if 'date_bounds' in st.session_state:
                 del st.session_state['date_bounds']
@@ -708,9 +1169,9 @@ elif menu == "reconciliation":
                 )
             net_card = (
                 '<div class="summary-card card-net">'
-                '<div class="label">Penghasilan Bersih (Net)</div>'
+                '<div class="label">Penghasilan</div>'
                 f'<div class="value">Rp {total_penghasilan:,.0f}</div>'
-                '<div class="pct">Dana Sudah Dilepas Shopee</div>'
+                '<div class="pct">Basis laba: penghasilan real setelah fee & penyesuaian</div>'
                 '</div>'
             )
             hpp_card = ""
@@ -720,15 +1181,15 @@ elif menu == "reconciliation":
                     '<div class="summary-card card-hpp">'
                     '<div class="label">Total Modal (HPP)</div>'
                     f'<div class="value">Rp {total_hpp_settled:,.0f}</div>'
-                    f'<div class="pct">HPP Produk Terjual</div>'
+                    f'<div class="pct">HPP real produk terjual</div>'
                     '</div>'
                 )
                 laba_color = "#10b981" if laba_bersih_settled >= 0 else "#f87171"
                 laba_card = (
                     '<div class="summary-card card-laba">'
-                    '<div class="label">Laba Bersih Real (Profit)</div>'
+                    '<div class="label">Laba Bersih</div>'
                     f'<div class="value" style="color: {laba_color};">Rp {laba_bersih_settled:,.0f}</div>'
-                    f'<div class="pct">Margin Bersih: {margin_laba_settled:.1f}%</div>'
+                    f'<div class="pct">Penghasilan - HPP = Laba | Margin: {margin_laba_settled:.1f}%</div>'
                     '</div>'
                 )
             daily_card = ""
@@ -935,9 +1396,9 @@ elif menu == "reconciliation":
                     f'<div class="pct">{filt_g["pct_biaya"]:.1f}% dari Subtotal</div>'
                     '</div>'
                     '<div class="summary-card card-net">'
-                    '<div class="label">Penghasilan Bersih</div>'
+                    '<div class="label">Penghasilan</div>'
                     f'<div class="value">Rp {filt_net:,.0f}</div>'
-                    '<div class="pct">Settled</div>'
+                    '<div class="pct">Basis laba filter ini</div>'
                     '</div>'
                 )
                 if filt_hpp > 0:
@@ -949,12 +1410,12 @@ elif menu == "reconciliation":
                         '<div class="summary-card card-laba">'
                         '<div class="label">Laba Bersih</div>'
                         f'<div class="value" style="color:{filt_laba_color};">Rp {filt_laba:,.0f}</div>'
-                        f'<div class="pct">Margin: {filt_margin:.1f}%</div>'
+                        f'<div class="pct">Penghasilan - HPP = Laba | Margin: {filt_margin:.1f}%</div>'
                         '</div>'
                         '<div class="summary-card card-laba">'
                         '<div class="label">Margin Laba</div>'
                         f'<div class="value" style="color:{filt_laba_color};">{filt_margin:.1f}%</div>'
-                        '<div class="pct">Laba bersih ÷ subtotal settled</div>'
+                        '<div class="pct">Laba bersih ÷ penghasilan</div>'
                         '</div>'
                     )
 
@@ -994,7 +1455,7 @@ elif menu == "reconciliation":
                         '<div class="summary-card card-laba">'
                         '<div class="label">Proyeksi Laba Bersih Pending</div>'
                         f'<div class="value" style="color:{filt_pending_profit_color};">Rp {filt_pending_profit:,.0f}</div>'
-                        '<div class="pct">Net estimasi pending − HPP pending</div>'
+                        '<div class="pct">Estimasi penghasilan pending - estimasi HPP pending</div>'
                         '</div>'
                         '<div class="summary-card card-grand">'
                         '<div class="label">Total Proyeksi Bersih</div>'
@@ -1012,12 +1473,12 @@ elif menu == "reconciliation":
                         )
                         filt_projected_profit_color = "#10b981" if filt_projected_profit >= 0 else "#f87171"
                         filt_projection_cards += (
-                            '<div class="summary-card card-laba">'
-                            '<div class="label">Proyeksi Laba Bersih</div>'
-                            f'<div class="value" style="color:{filt_projected_profit_color};">Rp {filt_projected_profit:,.0f}</div>'
-                            f'<div class="pct">Margin proyeksi: {filt_projected_margin:.1f}%</div>'
-                            '</div>'
-                        )
+                        '<div class="summary-card card-laba">'
+                        '<div class="label">Proyeksi Laba Bersih</div>'
+                        f'<div class="value" style="color:{filt_projected_profit_color};">Rp {filt_projected_profit:,.0f}</div>'
+                        f'<div class="pct">Penghasilan proyeksi - HPP proyeksi = Laba | Margin proyeksi: {filt_projected_margin:.1f}%</div>'
+                        '</div>'
+                    )
 
                     if num_days and num_days > 0:
                         filt_projection_cards += (
