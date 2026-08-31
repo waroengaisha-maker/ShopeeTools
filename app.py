@@ -278,6 +278,47 @@ def _find_session_order_file():
     return candidates[0] if candidates else None
 
 
+def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None):
+    """Menghitung pesanan batal dari file Order, di luar KPI finansial settled."""
+    empty_summary = {'count': 0, 'value': 0, 'rate': 0.0}
+    if not order_file_path or not Path(order_file_path).exists():
+        return empty_summary
+
+    try:
+        usecols = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Pesanan', 'Jumlah', 'Harga Setelah Diskon']
+        order_df = pd.read_excel(order_file_path, sheet_name='orders', usecols=usecols)
+        order_df['Waktu Pesanan Dibuat'] = pd.to_datetime(order_df['Waktu Pesanan Dibuat'], errors='coerce')
+        if start_date is not None:
+            order_df = order_df[order_df['Waktu Pesanan Dibuat'] >= pd.to_datetime(start_date).normalize()]
+        if end_date is not None:
+            end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            order_df = order_df[order_df['Waktu Pesanan Dibuat'] <= end_dt]
+
+        order_df['No. Pesanan'] = order_df['No. Pesanan'].astype(str).str.strip()
+        order_df = order_df[order_df['No. Pesanan'].ne('') & order_df['No. Pesanan'].ne('nan')]
+        status = order_df['Status Pesanan'].astype(str).str.strip().str.casefold()
+        cancelled = order_df[status.eq('batal')].copy()
+        denominator = order_df.loc[~status.eq('belum bayar'), 'No. Pesanan'].nunique()
+        cancelled_count = cancelled['No. Pesanan'].nunique()
+
+        raw_price = cancelled['Harga Setelah Diskon']
+        if pd.api.types.is_numeric_dtype(raw_price):
+            price = pd.to_numeric(raw_price, errors='coerce').fillna(0)
+        else:
+            price = raw_price.astype(str).str.replace('.', '', regex=False).str.replace(',', '', regex=False)
+            price = pd.to_numeric(price, errors='coerce').fillna(0)
+        quantity = pd.to_numeric(cancelled['Jumlah'], errors='coerce').fillna(0)
+        cancelled_value = int((price * quantity).sum())
+        return {
+            'count': int(cancelled_count),
+            'value': cancelled_value,
+            'rate': (cancelled_count / denominator * 100) if denominator > 0 else 0.0,
+        }
+    except Exception as exc:
+        LOGGER.warning("Cancelled order summary failed for %s: %s", order_file_path, exc)
+        return empty_summary
+
+
 def _compute_dashboard_kpis(result_df, hpp_lookup_map):
     df = result_df.copy()
     settled = df[df['Is_Settled'] == True].copy() if 'Is_Settled' in df.columns else df.copy()
@@ -426,10 +467,20 @@ def _build_daily_transaction_detail(order_file_path, result_df, selected_date, h
         subtotal_biaya_series = pd.to_numeric(detail.get('Subtotal Biaya', 0), errors='coerce').fillna(0)
         biaya_proses_series = pd.to_numeric(detail.get('Biaya Proses Pesanan', 0), errors='coerce').fillna(0)
         detail['Total Biaya'] = (subtotal_biaya_series + biaya_proses_series).astype(int)
-        detail['Laba Bersih'] = (
+        detail['Penghasilan'] = (
             pd.to_numeric(detail.get('Subtotal', 0), errors='coerce').fillna(0).astype(int)
-            + pd.to_numeric(detail.get('Total Biaya', 0), errors='coerce').fillna(0).astype(int)
+            + detail['Total Biaya']
+        )
+        detail['Laba Bersih'] = (
+            detail['Penghasilan']
             - detail['HPP']
+        )
+        qty_bersih_series = pd.to_numeric(detail.get('Jumlah Bersih', 0), errors='coerce').fillna(0)
+        detail['Laba Bersih (@)'] = (
+            detail['Laba Bersih'].div(qty_bersih_series.where(qty_bersih_series > 0, pd.NA))
+            .round()
+            .fillna(0)
+            .astype(int)
         )
         subtotal_series = pd.to_numeric(detail.get('Subtotal', 0), errors='coerce').fillna(0)
         detail['Biaya Administrasi (%)'] = pd.to_numeric(detail.get(COL_PCT_ADM, 0), errors='coerce').fillna(0)
@@ -437,14 +488,14 @@ def _build_daily_transaction_detail(order_file_path, result_df, selected_date, h
         detail['Biaya Promo XTRA (%)'] = pd.to_numeric(detail.get(COL_PCT_PROMO, 0), errors='coerce').fillna(0)
         detail['Subtotal Biaya (%)'] = pd.to_numeric(detail.get(COL_PCT_SUB_BIAYA, 0), errors='coerce').fillna(0)
         cols = [
-            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih',
+            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Harga (@)',
             'Subtotal',
             'Biaya Administrasi', 'Biaya Administrasi (%)',
             'Biaya Gratis Ongkir XTRA', 'Biaya Gratis Ongkir XTRA (%)',
             'Biaya Promo XTRA', 'Biaya Promo XTRA (%)',
             'Subtotal Biaya', 'Subtotal Biaya (%)',
             'Biaya Proses Pesanan',
-            'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
+            'Total Biaya', 'Penghasilan', 'HPP (@)', 'Laba Bersih (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
         ]
         detail = detail[[c for c in cols if c in detail.columns]].copy()
         return detail
@@ -935,6 +986,30 @@ if menu == "dashboard":
             )
 
             daily_order_file = _find_session_order_file()
+            cancelled_summary = _build_cancelled_order_summary(
+                daily_order_file,
+                start_date=proc_start,
+                end_date=proc_end,
+            )
+            st.markdown("### Anomali & Risiko")
+            if cancelled_summary['count'] > 0:
+                st.warning(
+                    f"Terdapat {cancelled_summary['count']:,} pesanan dibatalkan "
+                    f"dengan nilai bruto sekitar Rp {cancelled_summary['value']:,.0f}. "
+                    f"Tingkat pembatalan: {cancelled_summary['rate']:.2f}%.",
+                    icon="⚠️",
+                )
+            else:
+                st.success("Tidak ada pesanan dibatalkan pada periode ini.", icon="✅")
+            risk_c1, risk_c2, risk_c3 = st.columns(3)
+            with risk_c1:
+                st.metric("Pesanan Dibatalkan", f"{cancelled_summary['count']:,}")
+            with risk_c2:
+                st.metric("Nilai Pesanan Batal", f"Rp {cancelled_summary['value']:,.0f}")
+            with risk_c3:
+                st.metric("Tingkat Pembatalan", f"{cancelled_summary['rate']:.2f}%")
+            st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+
             chart_df = _build_daily_chart_data(daily_order_file, result, hpp_lookup)
             if not chart_df.empty:
                 st.markdown("### Grafik Omzet vs HPP vs Laba")
@@ -1073,8 +1148,8 @@ if menu == "dashboard":
                                 st.stop()
 
                         core_detail_cols = [
-                            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih',
-                            'Subtotal', 'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
+                            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Harga (@)',
+                            'Subtotal', 'Total Biaya', 'Penghasilan', 'HPP (@)', 'Laba Bersih (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
                         ]
                         fee_detail_cols = [
                             'No. Pesanan', 'Nama Produk', 'Biaya Administrasi', 'Biaya Administrasi (%)',
@@ -1116,6 +1191,7 @@ if menu == "dashboard":
                             column_config={
                                 'No. Pesanan': st.column_config.TextColumn('No. Pesanan'),
                                 'Nama Produk': st.column_config.TextColumn('Nama Produk'),
+                                'Harga (@)': st.column_config.NumberColumn('Harga (@)', format='%,d'),
                                 'Jumlah': st.column_config.NumberColumn('Jumlah', format='%,d'),
                                 'Returned quantity': st.column_config.NumberColumn('Retur', format='%,d'),
                                 'Jumlah Bersih': st.column_config.NumberColumn('Qty Bersih', format='%,d'),
@@ -1125,10 +1201,20 @@ if menu == "dashboard":
                                     format='%,d',
                                     help='Total biaya layanan Shopee, termasuk komponen fee yang tercatat pada transaksi ini.'
                                 ),
+                                'Penghasilan': st.column_config.NumberColumn(
+                                    'Penghasilan',
+                                    format='%,d',
+                                    help='Omzet + Total Biaya. Biaya Shopee bernilai negatif sesuai logic accounting aplikasi.'
+                                ),
                                 'HPP (@)': st.column_config.NumberColumn(
                                     'HPP (@)',
                                     format='%,d',
                                     help='Harga pokok per unit. Nilai 0 berarti produk belum termapping ke master HPP.'
+                                ),
+                                'Laba Bersih (@)': st.column_config.NumberColumn(
+                                    'Laba Bersih (@)',
+                                    format='%,d',
+                                    help='Laba Bersih dibagi Qty Bersih.'
                                 ),
                                 'HPP': st.column_config.NumberColumn(
                                     'HPP',
