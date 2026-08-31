@@ -7,6 +7,28 @@ COL_PCT_XTRA = '(%) '
 COL_PCT_PROMO = '(%)  '
 COL_PCT_SUB_BIAYA = '(%)   '
 
+
+def filter_valid_income_sku_rows(df_income):
+    """Pertahankan baris Income SKU yang memiliki identitas transaksi lengkap.
+
+    Total Penghasilan Rp0 tetap merupakan bukti settlement bila baris Income
+    tersebut cocok dengan Order. Nilai net income tidak boleh dipakai untuk
+    membuang row atau menentukan status settlement.
+    """
+    df_income = df_income[df_income['Lihat berdasarkan'] == 'Sku'].copy()
+
+    order_id = df_income['No. Pesanan'].astype(str).str.strip()
+    product_name = df_income['Nama Produk'].astype(str).str.strip()
+    invalid_values = {'', 'nan', 'none', 'total'}
+    valid_identity = (
+        df_income['No. Pesanan'].notna()
+        & df_income['Nama Produk'].notna()
+        & ~order_id.str.lower().isin(invalid_values)
+        & ~product_name.str.lower().isin(invalid_values)
+    )
+    return df_income[valid_identity].copy()
+
+
 def get_order_date_bounds(order_file):
     """Membaca file Order dan mengembalikan (min_date, max_date) dari kolom 'Waktu Pesanan Dibuat'.
     
@@ -91,8 +113,7 @@ def get_settlement_stats(order_file, income_file, start_date=None, end_date=None
 
         # --- Income: No. Pesanan yang sudah ada di laporan Penghasilan ---
         df_inc = pd.read_excel(income_file, sheet_name='Penghasilan', header=2)
-        df_inc = df_inc[df_inc['Total Penghasilan'] != 0]
-        df_inc = df_inc[df_inc['Lihat berdasarkan'] == 'Sku']
+        df_inc = filter_valid_income_sku_rows(df_inc)
         settled_ids = set(df_inc['No. Pesanan'].dropna().astype(str).unique())
 
         settled = all_order_ids & settled_ids
@@ -402,14 +423,9 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         .astype(int)
     )
     
-    # Filter: Total Penghasilan != 0
-    df_income = df_income[df_income['Total Penghasilan'] != 0]
-    
-    # Filter: Lihat berdasarkan == 'Sku'
-    df_income = df_income[df_income['Lihat berdasarkan'] == 'Sku']
-    
-    # Catat No. Pesanan yang sudah settlement di laporan Income (untuk flag Is_Settled)
-    settled_order_ids = set(df_income['No. Pesanan'].dropna().astype(str).unique())
+    # Income SKU dengan identitas transaksi lengkap adalah bukti settlement,
+    # termasuk saat Total Penghasilan bernilai Rp0.
+    df_income = filter_valid_income_sku_rows(df_income)
     
     # Pastikan Returned quantity terisi numerik (tanpa mengurangi Jumlah gross)
     df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0).astype(int)
@@ -495,7 +511,10 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     
     # Re-merge setelah hitung Total Biaya
     fee_columns = ['Total Biaya', 'Biaya Administrasi', 'Biaya Proses Pesanan', 'Biaya Gratis Ongkir XTRA', 'Biaya Promo XTRA', 'Pajak']
-    cols_to_merge = keys + fee_columns
+    # Marker eksplisit membedakan Income Rp0 yang benar-benar match dari Income
+    # yang tidak ada sama sekali. Jangan infer settlement dari kolom biaya.
+    df_income['Income_Matched'] = True
+    cols_to_merge = keys + fee_columns + ['Income_Matched']
     df_merged = pd.merge(df_order, df_income[cols_to_merge], on=keys, how='left')
 
     # Penggabungan Nama Produk dan Nama Variasi untuk laporan final (setelah join sukses)
@@ -510,6 +529,9 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
             return np.nan
         return series.dropna().sum()
 
+    def any_income_matched(series):
+        return series.fillna(False).astype(bool).any()
+
     agg_dict = {
         'Item_Price_Total': 'sum',
         'Jumlah': 'sum',
@@ -519,7 +541,8 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         'Biaya Promo XTRA': sum_or_nan,
         'Biaya Proses Pesanan': sum_or_nan,
         'Total Biaya': sum_or_nan,
-        'Pajak': sum_or_nan
+        'Pajak': sum_or_nan,
+        'Income_Matched': any_income_matched
     }
     
     result = df_merged.groupby(['Nama Produk Tampilan', 'No. Pesanan']).agg(agg_dict).reset_index()
@@ -546,8 +569,9 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
 
     result['Subtotal Biaya'] = result.apply(calc_subtotal_biaya, axis=1)
 
-    # Tandai baris yang settle secara presisi PER-ITEM (berdasarkan ada/tidaknya data pelepasan dana dari Income)
-    result['Is_Settled'] = result['Total Biaya'].notna()
+    # Tandai settlement berdasarkan bukti row Income yang berhasil match per item.
+    # Total Penghasilan = Rp0 tetap settlement; tidak ada Income match = pending.
+    result['Is_Settled'] = result['Income_Matched'].astype(bool)
 
     # Kolom kuantitas dan uang kotor selalu integer
     gross_numeric_cols = ['Harga (@)', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal']
