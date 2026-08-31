@@ -423,18 +423,30 @@ def _build_daily_transaction_detail(order_file_path, result_df, selected_date, h
             axis=1,
         )
         detail['HPP'] = detail.apply(_row_hpp, axis=1).astype(int)
+        subtotal_biaya_series = pd.to_numeric(detail.get('Subtotal Biaya', 0), errors='coerce').fillna(0)
+        biaya_proses_series = pd.to_numeric(detail.get('Biaya Proses Pesanan', 0), errors='coerce').fillna(0)
+        detail['Total Biaya'] = (subtotal_biaya_series + biaya_proses_series).astype(int)
         detail['Laba Bersih'] = (
             pd.to_numeric(detail.get('Subtotal', 0), errors='coerce').fillna(0).astype(int)
             + pd.to_numeric(detail.get('Total Biaya', 0), errors='coerce').fillna(0).astype(int)
             - detail['HPP']
         )
+        subtotal_series = pd.to_numeric(detail.get('Subtotal', 0), errors='coerce').fillna(0)
+        detail['Biaya Administrasi (%)'] = pd.to_numeric(detail.get(COL_PCT_ADM, 0), errors='coerce').fillna(0)
+        detail['Biaya Gratis Ongkir XTRA (%)'] = pd.to_numeric(detail.get(COL_PCT_XTRA, 0), errors='coerce').fillna(0)
+        detail['Biaya Promo XTRA (%)'] = pd.to_numeric(detail.get(COL_PCT_PROMO, 0), errors='coerce').fillna(0)
+        detail['Subtotal Biaya (%)'] = pd.to_numeric(detail.get(COL_PCT_SUB_BIAYA, 0), errors='coerce').fillna(0)
         cols = [
             'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih',
-            'Subtotal', 'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
+            'Subtotal',
+            'Biaya Administrasi', 'Biaya Administrasi (%)',
+            'Biaya Gratis Ongkir XTRA', 'Biaya Gratis Ongkir XTRA (%)',
+            'Biaya Promo XTRA', 'Biaya Promo XTRA (%)',
+            'Subtotal Biaya', 'Subtotal Biaya (%)',
+            'Biaya Proses Pesanan',
+            'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
         ]
         detail = detail[[c for c in cols if c in detail.columns]].copy()
-        if 'No. Pesanan' in detail.columns:
-            detail.insert(0, 'Tanggal', pd.to_datetime(selected_date).date())
         return detail
     except Exception as exc:
         LOGGER.warning("Daily transaction detail build failed for %s: %s", selected_date, exc)
@@ -1060,6 +1072,20 @@ if menu == "dashboard":
                                 st.info("Tidak ada transaksi untuk produk yang dipilih pada hari ini.")
                                 st.stop()
 
+                        core_detail_cols = [
+                            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih',
+                            'Subtotal', 'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
+                        ]
+                        fee_detail_cols = [
+                            'No. Pesanan', 'Nama Produk', 'Biaya Administrasi', 'Biaya Administrasi (%)',
+                            'Biaya Gratis Ongkir XTRA', 'Biaya Gratis Ongkir XTRA (%)',
+                            'Biaya Promo XTRA', 'Biaya Promo XTRA (%)',
+                            'Subtotal Biaya', 'Subtotal Biaya (%)',
+                            'Biaya Proses Pesanan', 'Total Biaya'
+                        ]
+                        core_detail_df = detail_df[[c for c in core_detail_cols if c in detail_df.columns]].copy()
+                        fee_detail_df = detail_df[[c for c in fee_detail_cols if c in detail_df.columns]].copy()
+
                         laba_warn_threshold = int(st.session_state.get('laba_warn_threshold', 10000))
                         def _style_hpp_cell(value):
                             if pd.isna(value) or value == 0:
@@ -1076,7 +1102,7 @@ if menu == "dashboard":
                             return 'background-color: rgba(16, 185, 129, 0.12); color: #bbf7d0; font-weight: 700;'
 
                         styled_detail_df = (
-                            detail_df.style
+                            core_detail_df.style
                             .map(_style_hpp_cell, subset=['HPP (@)'])
                             .map(_style_laba_cell, subset=['Laba Bersih'])
                         )
@@ -1085,7 +1111,6 @@ if menu == "dashboard":
                             use_container_width=True,
                             hide_index=True,
                             column_config={
-                                'Tanggal': st.column_config.TextColumn('Tanggal'),
                                 'No. Pesanan': st.column_config.TextColumn('No. Pesanan'),
                                 'Nama Produk': st.column_config.TextColumn('Nama Produk'),
                                 'Jumlah': st.column_config.NumberColumn('Jumlah', format='%,d'),
@@ -1114,6 +1139,27 @@ if menu == "dashboard":
                                 ),
                             },
                         )
+                        if not fee_detail_df.empty:
+                            with st.expander("Rincian Biaya", expanded=False):
+                                st.dataframe(
+                                    fee_detail_df,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        'No. Pesanan': st.column_config.TextColumn('No. Pesanan'),
+                                        'Nama Produk': st.column_config.TextColumn('Nama Produk'),
+                                        'Biaya Administrasi': st.column_config.NumberColumn('Biaya Admin', format='%,d'),
+                                        'Biaya Administrasi (%)': st.column_config.NumberColumn('(%)', format='%.2f%%'),
+                                        'Biaya Gratis Ongkir XTRA': st.column_config.NumberColumn('Biaya Gratis Ongkir XTRA', format='%,d'),
+                                        'Biaya Gratis Ongkir XTRA (%)': st.column_config.NumberColumn('(%)', format='%.2f%%'),
+                                        'Biaya Promo XTRA': st.column_config.NumberColumn('Biaya Promo XTRA', format='%,d'),
+                                        'Biaya Promo XTRA (%)': st.column_config.NumberColumn('(%)', format='%.2f%%'),
+                                        'Subtotal Biaya': st.column_config.NumberColumn('Subtotal Biaya', format='%,d'),
+                                        'Subtotal Biaya (%)': st.column_config.NumberColumn('(%)', format='%.2f%%'),
+                                        'Biaya Proses Pesanan': st.column_config.NumberColumn('Biaya Per Pesanan', format='%,d'),
+                                        'Total Biaya': st.column_config.NumberColumn('Total Biaya', format='%,d', help='Subtotal Biaya + Biaya Per Pesanan'),
+                                    },
+                                )
 
         filter_options = _build_dashboard_filter_options(result)
         filter_labels = {
