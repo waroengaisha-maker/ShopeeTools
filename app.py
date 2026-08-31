@@ -256,13 +256,21 @@ if menu == "📊 Rekonsiliasi Shopee":
             df_adj = st.session_state.get('df_adjustments', pd.DataFrame())
             
             # ─── Helper: Hitung ringkasan finansial dari slice dataframe ───
-            def calc_summary(df_slice, df_adj_all, hpp_lookup_map, n_days):
-                """Menghitung semua metrik finansial dari suatu slice dataframe.
-                Returns dict berisi semua metrik.
+            def calc_summary(df_slice, df_adj_all, hpp_lookup_map, n_days, history_df=None):
+                """Menghitung metrik finansial dari slice data.
+
+                ``history_df`` dipakai khusus sebagai basis estimasi biaya produk
+                pending. Dengan begitu drill-down ke satu pesanan tetap memakai
+                histori settlement seluruh periode, bukan fallback rasio umum.
                 """
                 s = {}
                 settled = df_slice[df_slice['Is_Settled'] == True].copy() if 'Is_Settled' in df_slice.columns else df_slice.copy()
                 unsettled = df_slice[df_slice['Is_Settled'] == False].copy() if 'Is_Settled' in df_slice.columns else pd.DataFrame()
+                fee_history = history_df if history_df is not None else df_slice
+                history_settled = (
+                    fee_history[fee_history['Is_Settled'] == True].copy()
+                    if 'Is_Settled' in fee_history.columns else fee_history.copy()
+                )
 
                 s['total_subtotal'] = int(settled['Subtotal'].sum())
                 s['total_biaya'] = int(settled['Total Biaya'].sum())
@@ -298,41 +306,62 @@ if menu == "📊 Rekonsiliasi Shopee":
                 s['unsettled_result'] = unsettled
                 s['settled_result'] = settled
                 s['unsettled_subtotal'] = int(unsettled['Subtotal'].sum()) if not unsettled.empty else 0
-                global_fee_ratio = (abs(s['total_biaya']) / sub) if sub > 0 else 0.15
-
-                if not unsettled.empty and not settled.empty:
-                    prod_fee_stats = settled.groupby('Nama Produk').apply(
-                        lambda g: (abs(g['Total Biaya'].sum()) / g['Subtotal'].sum()) if g['Subtotal'].sum() > 0 else global_fee_ratio,
-                        include_groups=False
-                    ).to_dict()
-                    def est_net(row):
-                        return row['Subtotal'] * (1 - prod_fee_stats.get(row['Nama Produk'], global_fee_ratio))
-                    s['est_unsettled_net'] = int(round(unsettled.apply(est_net, axis=1).sum()))
-                    s['effective_fee_ratio'] = (1 - (s['est_unsettled_net'] / s['unsettled_subtotal'])) if s['unsettled_subtotal'] > 0 else global_fee_ratio
-                else:
-                    s['effective_fee_ratio'] = global_fee_ratio
-                    s['est_unsettled_net'] = int(s['unsettled_subtotal'] * (1 - global_fee_ratio))
-
-                s['total_proyeksi'] = s['total_penghasilan'] + s['est_unsettled_net']
-
-                # HPP & Laba
                 def get_item_hpp_inner(row):
                     info = hpp_lookup_map.get(row['Nama Produk'], {})
                     return row['Jumlah Bersih'] * (info.get('HargaPokok', 0) / (info.get('Konversi', 1) or 1))
 
+                # Biaya non-proses mengikuti histori produk yang sudah settled.
+                # Biaya proses tidak diperkirakan dari rasio: selalu Rp1.250 per pesanan.
+                history_subtotal = int(history_settled['Subtotal'].sum()) if not history_settled.empty else 0
+                history_total_fee = int(history_settled['Total Biaya'].sum()) if 'Total Biaya' in history_settled.columns else 0
+                history_process_fee = (
+                    int(history_settled['Biaya Proses Pesanan'].sum())
+                    if 'Biaya Proses Pesanan' in history_settled.columns else 0
+                )
+                settled_non_process_fee = max(abs(history_total_fee) - abs(history_process_fee), 0)
+                global_non_process_fee_ratio = (
+                    settled_non_process_fee / history_subtotal if history_subtotal > 0 else 0.15
+                )
+                if not unsettled.empty and not history_settled.empty:
+                    def product_non_process_fee_ratio(rows):
+                        product_subtotal = rows['Subtotal'].sum()
+                        product_total_fee = abs(rows['Total Biaya'].sum())
+                        product_process_fee = abs(rows['Biaya Proses Pesanan'].sum()) if 'Biaya Proses Pesanan' in rows.columns else 0
+                        return max(product_total_fee - product_process_fee, 0) / product_subtotal if product_subtotal > 0 else global_non_process_fee_ratio
+
+                    prod_fee_stats = history_settled.groupby('Nama Produk').apply(
+                        product_non_process_fee_ratio,
+                        include_groups=False
+                    ).to_dict()
+                else:
+                    prod_fee_stats = {}
+
+                s['est_non_process_fee'] = int(round(sum(
+                    row['Subtotal'] * prod_fee_stats.get(row['Nama Produk'], global_non_process_fee_ratio)
+                    for _, row in unsettled.iterrows()
+                ))) if not unsettled.empty else 0
+                s['est_process_fee'] = 1250 * len(unsettled['No. Pesanan'].dropna().unique()) if not unsettled.empty else 0
+                s['est_unsettled_fee'] = -(s['est_non_process_fee'] + s['est_process_fee'])
+                s['est_unsettled_net'] = s['unsettled_subtotal'] + s['est_unsettled_fee']
+                s['effective_fee_ratio'] = (
+                    abs(s['est_unsettled_fee']) / s['unsettled_subtotal']
+                    if s['unsettled_subtotal'] > 0 else global_non_process_fee_ratio
+                )
+
+                # HPP & Laba
                 if not settled.empty and hpp_lookup_map:
                     s['total_hpp'] = int(round(settled.apply(get_item_hpp_inner, axis=1).sum()))
                     s['laba_bersih'] = s['total_penghasilan'] - s['total_hpp']
                     s['margin_laba'] = (s['laba_bersih'] / sub * 100) if sub > 0 else 0.0
-                    hpp_ratio = s['total_hpp'] / sub if sub > 0 else 0.0
-                    s['est_hpp_unsettled'] = int(round(s['unsettled_subtotal'] * hpp_ratio)) if s['unsettled_subtotal'] > 0 else 0
-                    s['total_hpp_proyeksi'] = s['total_hpp'] + s['est_hpp_unsettled']
                 else:
                     s['total_hpp'] = 0
                     s['laba_bersih'] = s['total_penghasilan']
                     s['margin_laba'] = 0.0
-                    s['est_hpp_unsettled'] = 0
-                    s['total_hpp_proyeksi'] = 0
+
+                s['est_hpp_unsettled'] = int(round(unsettled.apply(get_item_hpp_inner, axis=1).sum())) if not unsettled.empty and hpp_lookup_map else 0
+                s['total_hpp_proyeksi'] = s['total_hpp'] + s['est_hpp_unsettled']
+                s['est_unsettled_profit'] = s['est_unsettled_net'] - s['est_hpp_unsettled']
+                s['total_proyeksi'] = s['total_penghasilan'] + s['est_unsettled_net']
 
                 # Harian
                 s['avg_per_hari'] = s['total_penghasilan'] / n_days if n_days and n_days > 0 else None
@@ -657,7 +686,13 @@ if menu == "📊 Rekonsiliasi Shopee":
                 f_label = ', '.join([str(v) for v in selected_values[:3]])
                 if len(selected_values) > 3:
                     f_label += f" +{len(selected_values)-3} lainnya"
-                filt_g = calc_summary(filtered_result, df_adj, hpp_lookup, num_days)
+                filt_g = calc_summary(
+                    filtered_result,
+                    df_adj,
+                    hpp_lookup,
+                    num_days,
+                    history_df=result,
+                )
 
                 filt_settled = filt_g['settled_result']
                 filt_total_rows = len(filtered_result)
@@ -669,6 +704,8 @@ if menu == "📊 Rekonsiliasi Shopee":
                 filt_margin = filt_g['margin_laba']
                 filt_laba_color = "#10b981" if filt_laba >= 0 else "#f87171"
                 filt_product_count = filtered_result['Nama Produk'].dropna().nunique() if 'Nama Produk' in filtered_result.columns else 0
+                filt_unsettled = filt_g['unsettled_result']
+                filt_projection_html = ""
 
                 filt_cards = (
                     '<div class="summary-card card-gross">'
@@ -705,6 +742,87 @@ if menu == "📊 Rekonsiliasi Shopee":
                         '</div>'
                     )
 
+                # Proyeksi filter memakai tampilan yang sama dengan proyeksi toko,
+                # tetapi dihitung hanya dari transaksi yang lolos filter aktif.
+                if not filt_unsettled.empty:
+                    filt_est_pending = filt_g['est_unsettled_net']
+                    filt_total_projection = filt_g['total_proyeksi']
+                    filt_fee_ratio = filt_g['effective_fee_ratio']
+                    filt_unsettled_subtotal = filt_g['unsettled_subtotal']
+                    filt_estimated_fee = filt_g['est_unsettled_fee']
+                    filt_estimated_process_fee = filt_g['est_process_fee']
+                    filt_estimated_hpp = filt_g['est_hpp_unsettled']
+                    filt_pending_profit = filt_g['est_unsettled_profit']
+                    filt_pending_profit_color = "#10b981" if filt_pending_profit >= 0 else "#f87171"
+                    filt_projection_cards = (
+                        '<div class="summary-card card-gross">'
+                        '<div class="label">Subtotal Gross Pending</div>'
+                        f'<div class="value">Rp {filt_unsettled_subtotal:,.0f}</div>'
+                        '<div class="pct">Nilai transaksi sebelum potongan</div>'
+                        '</div>'
+                        '<div class="summary-card card-fees">'
+                        '<div class="label">Estimasi Total Biaya</div>'
+                        f'<div class="value">Rp {filt_estimated_fee:,.0f}</div>'
+                        f'<div class="pct">Histori produk + proses Rp {filt_estimated_process_fee:,.0f} (Rp 1.250/pesanan)</div>'
+                        '</div>'
+                        '<div class="summary-card card-potential">'
+                        '<div class="label">Estimasi Net Pending</div>'
+                        f'<div class="value">Rp {filt_est_pending:,.0f}</div>'
+                        f'<div class="pct">Setelah estimasi biaya {filt_fee_ratio * 100:.1f}%</div>'
+                        '</div>'
+                        '<div class="summary-card card-hpp">'
+                        '<div class="label">Estimasi HPP Pending</div>'
+                        f'<div class="value">Rp {filt_estimated_hpp:,.0f}</div>'
+                        '<div class="pct">HPP produk terkait</div>'
+                        '</div>'
+                        '<div class="summary-card card-laba">'
+                        '<div class="label">Proyeksi Laba Bersih Pending</div>'
+                        f'<div class="value" style="color:{filt_pending_profit_color};">Rp {filt_pending_profit:,.0f}</div>'
+                        '<div class="pct">Net estimasi pending − HPP pending</div>'
+                        '</div>'
+                        '<div class="summary-card card-grand">'
+                        '<div class="label">Total Proyeksi Bersih</div>'
+                        f'<div class="value">Rp {filt_total_projection:,.0f}</div>'
+                        '<div class="pct">Realisasi settled + estimasi pending</div>'
+                        '</div>'
+                    )
+
+                    filt_hpp_projection = filt_g['total_hpp_proyeksi']
+                    if filt_hpp_projection > 0:
+                        filt_projected_profit = filt_total_projection - filt_hpp_projection
+                        filt_projected_margin = (
+                            filt_projected_profit / filt_total_projection * 100
+                            if filt_total_projection > 0 else 0.0
+                        )
+                        filt_projected_profit_color = "#10b981" if filt_projected_profit >= 0 else "#f87171"
+                        filt_projection_cards += (
+                            '<div class="summary-card card-laba">'
+                            '<div class="label">Proyeksi Laba Bersih</div>'
+                            f'<div class="value" style="color:{filt_projected_profit_color};">Rp {filt_projected_profit:,.0f}</div>'
+                            f'<div class="pct">Margin proyeksi: {filt_projected_margin:.1f}%</div>'
+                            '</div>'
+                        )
+
+                    if num_days and num_days > 0:
+                        filt_projection_cards += (
+                            '<div class="summary-card card-grand">'
+                            '<div class="label">Proyeksi Bersih / Hari</div>'
+                            f'<div class="value">Rp {filt_total_projection / num_days:,.0f}</div>'
+                            f'<div class="pct">Proyeksi total ({num_days} hari)</div>'
+                            '</div>'
+                        )
+
+                    filt_pending_count = filt_g['unsettled_count']
+                    filt_projection_html = (
+                        '<div class="section-group">'
+                        '<div class="section-header">'
+                        '<div class="section-title"><span>⏳</span> Estimasi Pending & Total Proyeksi Detail</div>'
+                        f'<div class="section-badge badge-pending">{filt_pending_count} Pesanan Belum Settlement (sesuai filter)</div>'
+                        '</div>'
+                        f'<div class="summary-container">{filt_projection_cards}</div>'
+                        '</div>'
+                    )
+
                 filt_n_ord = filt_g['total_orders_valid']
                 filt_n_settled = filt_g['settled_count']
                 st.markdown(
@@ -718,6 +836,8 @@ if menu == "📊 Rekonsiliasi Shopee":
                     '</div>',
                     unsafe_allow_html=True
                 )
+                if filt_projection_html:
+                    st.markdown(filt_projection_html, unsafe_allow_html=True)
             else:
                 selected_values = []
 
