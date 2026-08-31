@@ -12,6 +12,7 @@ from hpp_manager import (
 )
 import io
 import hashlib
+import html
 import logging
 import pickle
 import re
@@ -274,7 +275,7 @@ def _find_session_order_file():
 
 def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None, settled_fee_ratio=0.0):
     """Menghitung pesanan batal dari file Order, di luar KPI finansial settled."""
-    empty_summary = {'count': 0, 'value': 0, 'income_lost': 0, 'rate': 0.0, 'details': pd.DataFrame()}
+    empty_summary = {'count': 0, 'value': 0, 'income_lost': 0, 'rate': 0.0, 'details': pd.DataFrame(), 'by_type': []}
     if not order_file_path or not Path(order_file_path).exists():
         return empty_summary
 
@@ -313,6 +314,20 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
             'Cancellation Reason', 'Alasan Batal',
         ]
         type_col = next((col for col in type_candidates if col in cancelled.columns), None)
+        cancellation_type = (
+            cancelled[type_col].map(lambda value: str(value).strip() if pd.notna(value) and str(value).strip() else 'Tidak tersedia')
+            if type_col else pd.Series('Tidak tersedia', index=cancelled.index)
+        )
+        fee_factor = 1 - max(0.0, min(float(settled_fee_ratio), 1.0))
+        by_type = []
+        for cancellation_label, type_rows in cancellation_type.groupby(cancellation_type):
+            type_value = int(round(line_value.loc[type_rows.index].sum()))
+            by_type.append({
+                'type': cancellation_label,
+                'count': int(cancelled.loc[type_rows.index, 'No. Pesanan'].nunique()),
+                'income_lost': int(round(type_value * fee_factor)),
+            })
+        by_type.sort(key=lambda item: item['income_lost'], reverse=True)
 
         detail_columns = {
             'Waktu Pesanan Dibuat': 'Waktu Pesanan Dibuat',
@@ -344,6 +359,7 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
             'count': int(cancelled_count),
             'value': cancelled_value,
             'income_lost': income_lost,
+            'by_type': by_type,
             'rate': (cancelled_count / denominator * 100) if denominator > 0 else 0.0,
             'details': details,
         }
@@ -1199,6 +1215,17 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
             st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+            if cancelled_summary.get('by_type'):
+                st.markdown("#### Estimasi Penghasilan Hilang berdasarkan Tipe Pembatalan")
+                type_cards = ''.join(
+                    f'''<div class="section-metric-card metric-blue">
+                        <span class="label">{html.escape(str(item['type']))}</span>
+                        <div class="value">Rp {item['income_lost']:,.0f}</div>
+                        <div class="sub">{item['count']:,} pesanan</div>
+                    </div>'''
+                    for item in cancelled_summary['by_type']
+                )
+                st.markdown(f'<div class="section-card-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">{type_cards}</div>', unsafe_allow_html=True)
             cancelled_details = cancelled_summary.get('details', pd.DataFrame())
             with st.expander("Lihat detail transaksi dibatalkan", expanded=False):
                 if cancelled_details.empty:
