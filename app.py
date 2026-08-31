@@ -748,6 +748,57 @@ html, body, [class*="css"] {
     padding: 1rem 1.2rem;
     margin: 1rem 0 1.2rem 0;
 }
+/* Card styling untuk metric dan panel interaktif dashboard */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1rem 1.05rem;
+    min-height: 92px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+    font-family: 'Inter', sans-serif;
+}
+[data-testid="stMetricLabel"] {
+    color: #94a3b8 !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricLabel"] div {
+    color: #94a3b8 !important;
+}
+[data-testid="stMetricValue"] {
+    color: #f8fafc !important;
+    font-size: 1.25rem !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricValue"] div,
+[data-testid="stMetricValue"] p,
+[data-testid="stMetricValue"] span {
+    color: #f8fafc !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricDelta"] {
+    color: #cbd5e1 !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: rgba(15, 23, 42, 0.55);
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    border-radius: 16px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+[data-testid="stExpander"] {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+}
+[data-testid="stExpander"] summary {
+    color: #f1f5f9;
+    font-weight: 700;
+}
 .kpi-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -787,6 +838,46 @@ html, body, [class*="css"] {
 .kpi-hpp .value { color: #f97316; }
 .kpi-profit .value { color: #10b981; }
 .kpi-margin .value { color: #c084fc; }
+.section-card-grid {
+    display: grid;
+    gap: 0.85rem;
+    margin: 0.75rem 0 0.8rem 0;
+}
+.risk-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.projection-card-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.section-metric-card {
+    padding: 0.9rem 1rem;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+.section-metric-card .label {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 0.35rem;
+}
+.section-metric-card .value {
+    color: #f8fafc;
+    font-size: 1.2rem;
+    font-weight: 800;
+    line-height: 1.15;
+}
+.section-metric-card .sub {
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    margin-top: 0.3rem;
+}
+.metric-blue .value { color: #38bdf8; }
+.metric-green .value { color: #4ade80; }
+.metric-red .value { color: #f87171; }
+.metric-orange .value { color: #f97316; }
+.metric-amber .value { color: #fbbf24; }
+.metric-teal .value { color: #2dd4bf; }
 .kpi-row-triplet {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1040,37 +1131,78 @@ if menu == "dashboard":
                 )
             else:
                 st.success("Tidak ada pesanan dibatalkan pada periode ini.", icon="✅")
-            risk_c1, risk_c2, risk_c3 = st.columns(3)
-            with risk_c1:
-                st.metric("Pesanan Dibatalkan", f"{cancelled_summary['count']:,}")
-            with risk_c2:
-                st.metric("Nilai Pesanan Batal", f"Rp {cancelled_summary['value']:,.0f}")
-            with risk_c3:
-                st.metric("Tingkat Pembatalan", f"{cancelled_summary['rate']:.2f}%")
+            st.markdown(
+                f"""
+                <div class="section-card-grid risk-card-grid">
+                    <div class="section-metric-card metric-red">
+                        <span class="label">Pesanan Dibatalkan</span>
+                        <div class="value">{cancelled_summary['count']:,}</div>
+                        <div class="sub">Order berstatus batal</div>
+                    </div>
+                    <div class="section-metric-card metric-orange">
+                        <span class="label">Nilai Pesanan Batal</span>
+                        <div class="value">Rp {cancelled_summary['value']:,.0f}</div>
+                        <div class="sub">Estimasi nilai bruto</div>
+                    </div>
+                    <div class="section-metric-card metric-amber">
+                        <span class="label">Tingkat Pembatalan</span>
+                        <div class="value">{cancelled_summary['rate']:.2f}%</div>
+                        <div class="sub">Dari seluruh order periode ini</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
 
             st.markdown("### Proyeksi Unsettled")
             st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
-            projection_c1, projection_c2, projection_c3, projection_c4, projection_c5, projection_c6 = st.columns(6)
-            with projection_c1:
-                st.metric("Pending", f"{total_pending:,}")
-            with projection_c2:
-                st.metric("Estimasi Omzet", f"Rp {pending_omzet:,.0f}")
-            with projection_c3:
-                st.metric("Estimasi Biaya", f"Rp {pending_biaya:,.0f}")
-            with projection_c4:
-                st.metric("Estimasi Penghasilan", f"Rp {pending_penghasilan:,.0f}")
-            with projection_c5:
-                st.metric("Estimasi HPP", f"Rp {pending_hpp:,.0f}")
-            with projection_c6:
-                st.metric("Proyeksi Laba Bersih", f"Rp {pending_laba:,.0f}")
+            pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
+            st.markdown(
+                f"""
+                <div class="section-card-grid projection-card-grid">
+                    <div class="section-metric-card metric-amber">
+                        <span class="label">Pending</span>
+                        <div class="value">{total_pending:,}</div>
+                        <div class="sub">Belum settlement</div>
+                    </div>
+                    <div class="section-metric-card metric-blue">
+                        <span class="label">Estimasi Omzet</span>
+                        <div class="value">Rp {pending_omzet:,.0f}</div>
+                        <div class="sub">Subtotal pending</div>
+                    </div>
+                    <div class="section-metric-card metric-red">
+                        <span class="label">Estimasi Biaya</span>
+                        <div class="value">Rp {pending_biaya:,.0f}</div>
+                        <div class="sub">Estimasi fee Shopee</div>
+                    </div>
+                    <div class="section-metric-card metric-green">
+                        <span class="label">Estimasi Penghasilan</span>
+                        <div class="value">Rp {pending_penghasilan:,.0f}</div>
+                        <div class="sub">Omzet setelah biaya</div>
+                    </div>
+                    <div class="section-metric-card metric-orange">
+                        <span class="label">Estimasi HPP</span>
+                        <div class="value">Rp {pending_hpp:,.0f}</div>
+                        <div class="sub">Modal produk pending</div>
+                    </div>
+                    <div class="section-metric-card {pending_laba_class}">
+                        <span class="label">Proyeksi Laba Bersih</span>
+                        <div class="value">Rp {pending_laba:,.0f}</div>
+                        <div class="sub">Penghasilan - HPP</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
             chart_df = _build_daily_chart_data(daily_order_file, result, hpp_lookup)
             if not chart_df.empty:
-                st.markdown("### Grafik Omzet vs HPP vs Laba")
-                st.caption("Per hari untuk melihat hari yang omzetnya tinggi tetapi labanya ternyata tipis.")
-                chart_view = chart_df.set_index('TanggalLabel')[['Omzet', 'HPP', 'Laba']]
-                st.line_chart(chart_view, height=320)
+                with st.container(border=True):
+                    st.markdown("### Grafik Omzet vs HPP vs Laba")
+                    st.caption("Per hari untuk melihat hari yang omzetnya tinggi tetapi labanya ternyata tipis.")
+                    chart_view = chart_df.set_index('TanggalLabel')[['Omzet', 'HPP', 'Laba']]
+                    st.line_chart(chart_view, height=320)
                 with st.expander("Lihat data harian", expanded=False):
                     daily_display = chart_df[['TanggalLabel', 'Omzet', 'Biaya', 'Penghasilan', 'HPP', 'Laba']].copy()
                     st.dataframe(
@@ -1362,14 +1494,15 @@ if menu == "dashboard":
         st.markdown('</div>', unsafe_allow_html=True)
 
         dashboard_filtered = _apply_dashboard_filters(result, periode_vals, produk_vals, sku_vals, settlement_vals, retur_vals)
-        st.caption(f"Menampilkan {len(dashboard_filtered)} baris dari {len(result)} baris data.")
 
         display_df = dashboard_filtered.copy()
         if 'No.' in display_df.columns:
             display_df = display_df.drop(columns=['No.'])
         display_df.insert(0, 'No.', range(1, len(display_df) + 1))
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        with st.container(border=True):
+            st.caption(f"Menampilkan {len(dashboard_filtered)} baris dari {len(result)} baris data.")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 # ==============================================================================
