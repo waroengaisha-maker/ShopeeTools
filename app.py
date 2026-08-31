@@ -845,6 +845,14 @@ html, body, [class*="css"] {
     border-radius: 16px;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.section-parent-card) {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 14px;
+    padding: 0.85rem 1rem !important;
+    margin: 0.75rem 0;
+    box-shadow: none;
+}
 [data-testid="stExpander"] {
     background: rgba(15, 23, 42, 0.55);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -932,15 +940,15 @@ html, body, [class*="css"] {
     margin-top: 0.3rem;
 }
 .section-parent-card {
-    margin: 1rem 0 0.65rem 0;
-    padding: 0.85rem 1.1rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+    margin: 0 0 0.65rem 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
 }
-.section-parent-card .title { color: #f8fafc; font-size: 1.05rem; font-weight: 800; }
-.section-parent-card .description { color: #94a3b8; font-size: 0.78rem; margin-top: 0.25rem; }
+.section-parent-card .title { color: #f8fafc; font-size: 1.45rem; line-height: 1.1; font-weight: 800; }
+.section-parent-card .description { color: #93c5fd; font-size: 0.78rem; margin-top: 0.45rem; letter-spacing: 0.03em; }
 .metric-blue .value { color: #38bdf8; }
 .metric-green .value { color: #4ade80; }
 .metric-red .value { color: #f87171; }
