@@ -13,6 +13,8 @@ from hpp_manager import (
 import io
 import hashlib
 import re
+import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -31,7 +33,36 @@ if not isinstance(session_token, str) or not re.fullmatch(r"[a-f0-9]{32}", sessi
     )
     st.query_params["session"] = session_token
 st.session_state.session_id = session_token
-SESSION_UPLOAD_DIR = Path("data") / "uploads" / st.session_state.session_id
+SESSION_UPLOAD_ROOT = Path("data") / "uploads"
+SESSION_UPLOAD_DIR = SESSION_UPLOAD_ROOT / st.session_state.session_id
+SESSION_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def cleanup_expired_session_uploads(active_session_id):
+    """Hapus folder upload sesi lama tanpa menyentuh sesi yang sedang aktif."""
+    if not SESSION_UPLOAD_ROOT.is_dir():
+        return
+
+    now = time.time()
+    for session_dir in SESSION_UPLOAD_ROOT.iterdir():
+        # Batasi target hanya pada folder dengan format ID sesi yang dibuat app.
+        if (
+            not session_dir.is_dir()
+            or session_dir.name == active_session_id
+            or not re.fullmatch(r"[a-f0-9]{32}", session_dir.name)
+        ):
+            continue
+        try:
+            if now - session_dir.stat().st_mtime > SESSION_UPLOAD_MAX_AGE_SECONDS:
+                shutil.rmtree(session_dir)
+        except OSError:
+            # Upload sesi lain dapat sedang dipakai; coba lagi pada pemuatan app berikutnya.
+            continue
+
+
+if not st.session_state.get("session_upload_cleanup_done"):
+    cleanup_expired_session_uploads(st.session_state.session_id)
+    st.session_state.session_upload_cleanup_done = True
 
 
 def persist_session_order_upload(uploaded_file):
