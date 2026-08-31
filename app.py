@@ -337,6 +337,39 @@ def _compute_dashboard_kpis(result_df, hpp_lookup_map):
     settle_rate = (settled_count / total_orders_valid * 100) if total_orders_valid > 0 else 100.0
     pending_count = unsettled_count
 
+    # Proyeksi pending memakai pola fee dan HPP dari transaksi settled.
+    unsettled_subtotal = int(unsettled['Subtotal'].sum()) if not unsettled.empty and 'Subtotal' in unsettled.columns else 0
+    history_subtotal = int(settled['Subtotal'].sum()) if 'Subtotal' in settled.columns else 0
+    history_total_fee = abs(int(settled['Total Biaya'].sum())) if 'Total Biaya' in settled.columns else 0
+    history_process_fee = abs(int(settled['Biaya Proses Pesanan'].sum())) if 'Biaya Proses Pesanan' in settled.columns else 0
+    settled_order_count = settled['No. Pesanan'].dropna().nunique() if not settled.empty and 'No. Pesanan' in settled.columns else 0
+    estimated_process_fee_per_order = history_process_fee / settled_order_count if settled_order_count > 0 else 0
+    global_non_process_fee_ratio = (
+        max(history_total_fee - history_process_fee, 0) / history_subtotal
+        if history_subtotal > 0 else 0.15
+    )
+    product_fee_ratio = {}
+    if not settled.empty and 'Nama Produk' in settled.columns and 'Subtotal' in settled.columns:
+        for product_name, product_rows in settled.groupby('Nama Produk'):
+            product_subtotal = int(product_rows['Subtotal'].sum())
+            product_total_fee = abs(int(product_rows['Total Biaya'].sum())) if 'Total Biaya' in product_rows.columns else 0
+            product_process_fee = abs(int(product_rows['Biaya Proses Pesanan'].sum())) if 'Biaya Proses Pesanan' in product_rows.columns else 0
+            product_fee_ratio[product_name] = (
+                max(product_total_fee - product_process_fee, 0) / product_subtotal
+                if product_subtotal > 0 else global_non_process_fee_ratio
+            )
+    estimated_non_process_fee = int(round(sum(
+        row['Subtotal'] * product_fee_ratio.get(row.get('Nama Produk'), global_non_process_fee_ratio)
+        for _, row in unsettled.iterrows()
+    ))) if not unsettled.empty else 0
+    estimated_process_fee = int(round(
+        estimated_process_fee_per_order * unsettled['No. Pesanan'].dropna().nunique()
+    )) if not unsettled.empty and 'No. Pesanan' in unsettled.columns else 0
+    estimated_fee = -(estimated_non_process_fee + estimated_process_fee)
+    estimated_income = unsettled_subtotal + estimated_fee
+    estimated_hpp = int(round(unsettled.apply(get_item_hpp, axis=1).sum())) if not unsettled.empty and hpp_lookup_map else 0
+    estimated_profit = estimated_income - estimated_hpp
+
     return {
         'total_subtotal': total_subtotal,
         'total_biaya': abs(total_biaya),
@@ -349,6 +382,13 @@ def _compute_dashboard_kpis(result_df, hpp_lookup_map):
         'unsettled_count': unsettled_count,
         'settle_rate': settle_rate,
         'pending_count': pending_count,
+        'unsettled_subtotal': unsettled_subtotal,
+        'estimated_fee': estimated_fee,
+        'estimated_income': estimated_income,
+        'estimated_hpp': estimated_hpp,
+        'estimated_profit': estimated_profit,
+        'projected_income': total_penghasilan + estimated_income,
+        'projected_profit': laba_bersih + estimated_profit,
     }
 
 
@@ -913,6 +953,11 @@ if menu == "dashboard":
         total_hpp = kpi_g['total_hpp']
         laba_bersih = kpi_g['laba_bersih']
         margin_laba = kpi_g['margin_laba']
+        pending_omzet = kpi_g['unsettled_subtotal']
+        pending_biaya = abs(kpi_g['estimated_fee'])
+        pending_penghasilan = kpi_g['estimated_income']
+        pending_hpp = kpi_g['estimated_hpp']
+        pending_laba = kpi_g['estimated_profit']
 
         st.markdown(
             f"""
@@ -1003,6 +1048,22 @@ if menu == "dashboard":
             with risk_c3:
                 st.metric("Tingkat Pembatalan", f"{cancelled_summary['rate']:.2f}%")
             st.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+
+            st.markdown("### Proyeksi Unsettled")
+            st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
+            projection_c1, projection_c2, projection_c3, projection_c4, projection_c5, projection_c6 = st.columns(6)
+            with projection_c1:
+                st.metric("Pending", f"{total_pending:,}")
+            with projection_c2:
+                st.metric("Estimasi Omzet", f"Rp {pending_omzet:,.0f}")
+            with projection_c3:
+                st.metric("Estimasi Biaya", f"Rp {pending_biaya:,.0f}")
+            with projection_c4:
+                st.metric("Estimasi Penghasilan", f"Rp {pending_penghasilan:,.0f}")
+            with projection_c5:
+                st.metric("Estimasi HPP", f"Rp {pending_hpp:,.0f}")
+            with projection_c6:
+                st.metric("Proyeksi Laba Bersih", f"Rp {pending_laba:,.0f}")
 
             chart_df = _build_daily_chart_data(daily_order_file, result, hpp_lookup)
             if not chart_df.empty:
