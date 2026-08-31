@@ -11,8 +11,42 @@ from hpp_manager import (
     get_suggestion_with_confidence
 )
 import io
+import hashlib
+import re
+import uuid
+from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
+
+# Setiap browser session memiliki ruang upload sendiri. Token ikut disimpan di
+# URL agar unggahan tetap dapat ditemukan setelah halaman dimuat ulang atau
+# pengguna berpindah menu melalui tautan navigasi.
+session_token = st.query_params.get("session")
+if not isinstance(session_token, str) or not re.fullmatch(r"[a-f0-9]{32}", session_token):
+    existing_session_id = st.session_state.get("session_id")
+    session_token = (
+        existing_session_id
+        if isinstance(existing_session_id, str) and re.fullmatch(r"[a-f0-9]{32}", existing_session_id)
+        else uuid.uuid4().hex
+    )
+    st.query_params["session"] = session_token
+st.session_state.session_id = session_token
+SESSION_UPLOAD_DIR = Path("data") / "uploads" / st.session_state.session_id
+
+
+def persist_session_order_upload(uploaded_file):
+    """Simpan file Order upload ke folder session dan kembalikan byte/path aktif."""
+    raw_bytes = uploaded_file.getvalue()
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    if st.session_state.get('uploaded_order_sha256') != digest:
+        SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', Path(uploaded_file.name).name).strip('._') or 'order.xlsx'
+        stored_path = SESSION_UPLOAD_DIR / f"order_{digest[:12]}_{safe_name}"
+        stored_path.write_bytes(raw_bytes)
+        st.session_state.uploaded_order_sha256 = digest
+        st.session_state.uploaded_order_path = str(stored_path)
+        st.session_state.uploaded_order_name = uploaded_file.name
+    return raw_bytes
 
 # ─── Custom CSS untuk tampilan premium ───
 st.markdown("""
@@ -201,10 +235,11 @@ html, body, [class*="css"] {
 menu = st.query_params.get("page", "dashboard")
 if menu not in {"dashboard", "reconciliation", "hpp"}:
     menu = "dashboard"
+session_query = f"session={st.session_state.session_id}"
 
 with st.sidebar:
     st.markdown(
-        '<h2><a class="sidebar-brand-link" href="?" target="_self">🏪 Warung Aisha Tool</a></h2>',
+        f'<h2><a class="sidebar-brand-link" href="?{session_query}" target="_self">🏪 Warung Aisha Tool</a></h2>',
         unsafe_allow_html=True,
     )
     st.caption("Alat Analisis & Manajemen Penjualan Shopee")
@@ -215,15 +250,15 @@ with st.sidebar:
     reconciliation_active = " active" if menu == "reconciliation" else ""
     hpp_active = " active" if menu == "hpp" else ""
     st.markdown(
-        f'<a class="sidebar-nav-link{dashboard_active}" href="?" target="_self">🏠 Dashboard</a>',
+        f'<a class="sidebar-nav-link{dashboard_active}" href="?{session_query}" target="_self">🏠 Dashboard</a>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=reconciliation" target="_self">📊 Rekonsiliasi Shopee</a>',
+        f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=reconciliation&{session_query}" target="_self">📊 Rekonsiliasi Shopee</a>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<a class="sidebar-nav-link{hpp_active}" href="?page=hpp" target="_self">📦 Kelola Master HPP</a>',
+        f'<a class="sidebar-nav-link{hpp_active}" href="?page=hpp&{session_query}" target="_self">📦 Kelola Master HPP</a>',
         unsafe_allow_html=True,
     )
     st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
@@ -257,10 +292,9 @@ elif menu == "reconciliation":
         # Simpan sumber upload agar tab Pemetaan tetap dapat membaca daftar produk
         # walaupun pengguna berpindah menu sebelum menjalankan rekonsiliasi.
         if uploaded_order is not None:
-            # Simpan byte aktual, bukan hanya handle UploadedFile yang dapat
-            # hilang ketika widget tidak sedang dirender setelah navigasi menu.
-            st.session_state.uploaded_order_bytes = uploaded_order.getvalue()
-            st.session_state.uploaded_order_name = uploaded_order.name
+            # Simpan byte aktual dan salinan fisik terisolasi per session, bukan
+            # hanya handle UploadedFile yang dapat hilang setelah navigasi menu.
+            st.session_state.uploaded_order_bytes = persist_session_order_upload(uploaded_order)
 
     if not uploaded_order or not uploaded_income:
         st.info("👈 **Silakan unggah Laporan Order dan Laporan Penghasilan Shopee di sidebar sebelah kiri** untuk memulai rekonsiliasi.")
@@ -1049,30 +1083,21 @@ elif menu == "hpp":
 
     # ─── TAB 1: PEMETAAN SKU SHOPEE ───
     with tab_mapping:
+        # Pemetaan tetap dapat dimulai saat sesi Rekonsiliasi sudah berakhir atau
+        # file diunggah dari tab/browser lain. File ini diperlakukan sama dengan
+        # unggahan Order pada menu Rekonsiliasi dan tersimpan untuk sesi aktif.
+        mapping_order_upload = st.file_uploader(
+            "File Order untuk mengambil daftar produk (Excel)",
+            type=["xlsx"],
+            key="mapping_order_uploader",
+            help="Opsional bila file Order sudah diunggah di menu Rekonsiliasi.",
+        )
+        if mapping_order_upload is not None:
+            st.session_state.uploaded_order_bytes = persist_session_order_upload(mapping_order_upload)
+            st.session_state.uploaded_order_name = mapping_order_upload.name
+
         st.subheader("🔗 Pemetaan SKU Shopee ke Satuan Master HPP")
         st.caption("Petakan setiap produk di toko Shopee ke satuan master yang tepat (PCS, RTG, PAK, DUS). Anda juga dapat langsung mengedit nilai HPP/Unit.")
-
-        with st.form("add_manual_shopee_product", clear_on_submit=True):
-            manual_product_name = st.text_input(
-                "Tambah produk Shopee yang belum tampil di tabel",
-                placeholder="Tempel nama produk persis seperti di Shopee",
-                help="Gunakan ini untuk produk yang belum ada di hasil rekonsiliasi sesi ini. Setelah ditambahkan, pilih master HPP-nya pada tabel di bawah.",
-            )
-            add_manual_product = st.form_submit_button("➕ Tambahkan ke Pemetaan")
-
-        if add_manual_product:
-            manual_product_name = manual_product_name.strip()
-            if not manual_product_name:
-                st.warning("Masukkan nama produk Shopee terlebih dahulu.")
-            elif manual_product_name in mapping_dict:
-                st.info("Produk tersebut sudah ada di tabel pemetaan.")
-            else:
-                # Nilai kosong menandakan produk sudah terdaftar, tetapi belum
-                # dipetakan ke satuan/item master HPP mana pun.
-                mapping_dict[manual_product_name] = ""
-                save_mapping(mapping_dict)
-                st.success("Produk ditambahkan. Silakan pilih master HPP-nya pada tabel.")
-                st.rerun()
 
         # Ambil daftar produk yang sudah ada di mapping atau dari file rekonsiliasi jika ada
         all_prods_set = set(mapping_dict.keys())
@@ -1080,6 +1105,9 @@ elif menu == "hpp":
             all_prods_set.update(st.session_state.result['Nama Produk'].dropna().unique().tolist())
         uploaded_order_bytes = st.session_state.get('uploaded_order_bytes')
         uploaded_order_name = st.session_state.get('uploaded_order_name')
+        uploaded_order_path = st.session_state.get('uploaded_order_path')
+        if uploaded_order_path and Path(uploaded_order_path).is_file():
+            uploaded_order_bytes = Path(uploaded_order_path).read_bytes()
         # Fallback untuk sesi yang sudah memiliki widget uploader sebelum byte
         # disimpan (misalnya setelah hot-reload aplikasi).
         if not uploaded_order_bytes:
@@ -1087,12 +1115,12 @@ elif menu == "hpp":
             if active_order_upload is not None:
                 uploaded_order_bytes = active_order_upload.getvalue()
                 uploaded_order_name = active_order_upload.name
-                st.session_state.uploaded_order_bytes = uploaded_order_bytes
-                st.session_state.uploaded_order_name = uploaded_order_name
+                st.session_state.uploaded_order_bytes = persist_session_order_upload(active_order_upload)
+                uploaded_order_path = st.session_state.get('uploaded_order_path')
 
         if uploaded_order_bytes:
             uploaded_order_name = uploaded_order_name or 'file upload aktif'
-            st.caption(f"Sumber produk: **{uploaded_order_name}** (file upload aktif; bukan folder lokal)")
+            st.caption(f"Sumber produk: **{uploaded_order_name}** (upload session **{st.session_state.session_id[:8]}**; bukan file toko lain)")
             try:
                 uploaded_order_for_mapping = io.BytesIO(uploaded_order_bytes)
                 uploaded_product_options = get_order_filter_options(uploaded_order_for_mapping)
@@ -1102,13 +1130,25 @@ elif menu == "hpp":
                 # upload gagal dibaca.
                 pass
         else:
-            st.info("Belum ada file Order upload aktif. Buka menu Rekonsiliasi dan unggah file Order terlebih dahulu.")
+            st.info("Belum ada file Order aktif. Unggah file pada bagian di atas atau melalui menu Rekonsiliasi.")
         
         all_prods_list = sorted(list(all_prods_set))
 
         if not all_prods_list:
-            st.info("💡 Belum ada produk Shopee yang tercatat. Silakan jalankan rekonsiliasi terlebih dahulu atau tambahkan mapping.")
+            st.info("💡 Belum ada produk Shopee yang tercatat. Unggah file Order untuk mengambil daftar produk.")
         else:
+            # Pemetaan dengan kecocokan sangat tinggi (>=90%) disimpan otomatis.
+            # Produk lain tetap menunggu peninjauan agar angka HPP tidak keliru.
+            mapping_before_auto = dict(mapping_dict)
+            mapping_dict = auto_suggest_mapping(all_prods_list, df_hpp_master)
+            auto_mapped_count = sum(
+                1
+                for product in all_prods_list
+                if not mapping_before_auto.get(product) and mapping_dict.get(product)
+            )
+            if auto_mapped_count:
+                st.success(f"✅ {auto_mapped_count} produk dipetakan otomatis dengan kecocokan tinggi.")
+
             BELUM_DIPETAKAN = "(Belum Dipetakan)"
             hpp_options_list = [BELUM_DIPETAKAN] + [
                 f"{r['KodeItem']} - {r['NamaItem']} [{r['Satuan']} (isi {r['Konversi']:g})] (HPP: Rp {r['HargaPokok']:,.0f})"
@@ -1173,7 +1213,20 @@ elif menu == "hpp":
             with m_c4:
                 st.metric("HPP Kosong / 0", f"{zero_hpp_count} SKU", delta=f"-{zero_hpp_count}" if zero_hpp_count > 0 else "Aman", delta_color="inverse")
 
-            edited_df = st.data_editor(
+            review_df = mapping_df[mapping_df['HPP (@)'].isna()].copy()
+            if review_df.empty:
+                st.success("✅ Semua SKU sudah memiliki pemetaan HPP.")
+            else:
+                st.subheader("Perlu ditinjau")
+                st.caption("Hanya produk dengan rekomendasi yang belum dikonfirmasi atau belum memiliki pemetaan.")
+                st.dataframe(review_df, use_container_width=True, hide_index=True)
+
+            manual_section = st.expander("Koreksi manual (semua SKU)", expanded=False)
+            manual_section.caption(
+                "Gunakan bila ingin mengganti hasil otomatis, mengisi produk yang belum terpetakan, "
+                "atau mengubah HPP per unit."
+            )
+            edited_df = manual_section.data_editor(
                 mapping_df,
                 column_config={
                     'Status': st.column_config.TextColumn(
@@ -1203,7 +1256,7 @@ elif menu == "hpp":
                 key="bulk_mapping_editor_standalone",
             )
 
-            if st.button("💾 Simpan Semua Perubahan Pemetaan", key="btn_save_mapping_page", type="primary"):
+            if manual_section.button("💾 Simpan Semua Perubahan Pemetaan", key="btn_save_mapping_page", type="primary"):
                 mapping_changed = 0
                 hpp_changed = 0
 

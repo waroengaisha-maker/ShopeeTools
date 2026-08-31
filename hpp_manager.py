@@ -119,7 +119,10 @@ def auto_suggest_mapping(shopee_product_names, df_hpp):
         return existing_mapping
 
     for s_name in shopee_product_names:
-        if s_name not in existing_mapping:
+        # Entri kosong dari pemetaan manual versi lama tetap boleh menerima
+        # saran otomatis; hanya pemetaan yang benar-benar sudah memiliki kunci
+        # HPP yang dipertahankan.
+        if not existing_mapping.get(s_name):
             best_key, score, _ = get_suggestion_with_confidence(s_name, df_hpp)
             # Hanya simpan permanen jika tingkat keyakinan >= 90%
             if score >= 0.90 and best_key:
@@ -130,4 +133,3 @@ def auto_suggest_mapping(shopee_product_names, df_hpp):
         save_mapping(existing_mapping)
 
     return existing_mapping
-
