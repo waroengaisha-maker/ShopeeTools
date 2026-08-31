@@ -852,6 +852,27 @@ if menu == "📊 Rekonsiliasi Shopee":
 
             display_df = filtered_result.copy()
 
+            # Tampilkan harga pokok per unit di dekat harga jual agar margin produk
+            # mudah dibaca langsung pada tabel detail.
+            if 'Nama Produk' in display_df.columns and 'Harga (@)' in display_df.columns:
+                def get_hpp_per_unit(product_name):
+                    hpp_info = hpp_lookup.get(product_name, {})
+                    if not hpp_info:
+                        return pd.NA
+                    return int(round(
+                        hpp_info.get('HargaPokok', 0) /
+                        (hpp_info.get('Konversi', 1) or 1)
+                    ))
+
+                if 'HPP (@)' in display_df.columns:
+                    display_df = display_df.drop(columns=['HPP (@)'])
+                hpp_position = display_df.columns.get_loc('Harga (@)') + 1
+                hpp_values = pd.array(
+                    display_df['Nama Produk'].map(get_hpp_per_unit),
+                    dtype='Int64'
+                )
+                display_df.insert(hpp_position, 'HPP (@)', hpp_values)
+
             def highlight_rows(row):
                 is_settled = row.get('Is_Settled', True)
                 ret_qty = row.get('Returned quantity', 0)
@@ -874,6 +895,7 @@ if menu == "📊 Rekonsiliasi Shopee":
                 'Returned quantity': st.column_config.NumberColumn("Retur (Qty)", format="%d", help="Jumlah unit yang diretur pembeli"),
                 'Jumlah Bersih': st.column_config.NumberColumn("Jumlah Bersih (Unit)", format="%d", help="Kuantitas fisik real terjual (Jumlah - Retur). Dipakai untuk dasar modal HPP."),
                 'Subtotal': st.column_config.NumberColumn("Subtotal (Gross Sales)", format="%,d", help="Nilai transaksi kotor awal (Jumlah × Harga). Potongan pengembalian dana retur dicatat pada tabel Penyesuaian (Adjustment)."),
+                'HPP (@)': st.column_config.NumberColumn("HPP (@)", format="%,d", help="Harga pokok per unit sesuai mapping master HPP dan konversi satuan produk."),
             }
             
             thousand_cols = [
