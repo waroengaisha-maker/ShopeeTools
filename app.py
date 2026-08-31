@@ -1129,7 +1129,10 @@ if menu == "dashboard":
             unsafe_allow_html=True,
         )
 
-        # KPI utama paling atas
+        st.markdown("### Pesanan Settled")
+        st.caption("Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.")
+
+        # KPI utama pesanan settled
         if 'result' in st.session_state:
             laba_kpi_color = "#10b981" if laba_bersih >= 0 else "#f87171"
             st.markdown(
@@ -1168,6 +1171,22 @@ if menu == "dashboard":
                 </div>
                 """,
                 unsafe_allow_html=True,
+            )
+
+            st.markdown("### Proyeksi Pesanan Unsettled")
+            st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
+            pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
+            st.markdown(
+                f"""
+                <div class="section-card-grid projection-card-grid">
+                    <div class="section-metric-card metric-amber"><span class="label">Pending</span><div class="value">{total_pending:,}</div><div class="sub">Belum settlement</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Estimasi Omzet</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">Subtotal pending</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Estimasi Biaya</span><div class="value">Rp {pending_biaya:,.0f}</div><div class="sub">Estimasi fee Shopee</div></div>
+                    <div class="section-metric-card metric-green"><span class="label">Estimasi Penghasilan</span><div class="value">Rp {pending_penghasilan:,.0f}</div><div class="sub">Omzet setelah biaya</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Estimasi HPP</span><div class="value">Rp {pending_hpp:,.0f}</div><div class="sub">Modal produk pending</div></div>
+                    <div class="section-metric-card {pending_laba_class}"><span class="label">Proyeksi Laba Bersih</span><div class="value">Rp {pending_laba:,.0f}</div><div class="sub">Penghasilan - HPP</div></div>
+                </div>
+                """, unsafe_allow_html=True,
             )
 
             daily_order_file = _find_session_order_file()
@@ -1248,47 +1267,6 @@ if menu == "dashboard":
                         },
                     )
                     st.caption("Tipe pembatalan diambil dari kolom alasan/jenis pembatalan pada file Order. Nilai transaksi = harga satuan × jumlah.")
-
-            st.markdown("### Proyeksi Unsettled")
-            st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
-            pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
-            st.markdown(
-                f"""
-                <div class="section-card-grid projection-card-grid">
-                    <div class="section-metric-card metric-amber">
-                        <span class="label">Pending</span>
-                        <div class="value">{total_pending:,}</div>
-                        <div class="sub">Belum settlement</div>
-                    </div>
-                    <div class="section-metric-card metric-blue">
-                        <span class="label">Estimasi Omzet</span>
-                        <div class="value">Rp {pending_omzet:,.0f}</div>
-                        <div class="sub">Subtotal pending</div>
-                    </div>
-                    <div class="section-metric-card metric-red">
-                        <span class="label">Estimasi Biaya</span>
-                        <div class="value">Rp {pending_biaya:,.0f}</div>
-                        <div class="sub">Estimasi fee Shopee</div>
-                    </div>
-                    <div class="section-metric-card metric-green">
-                        <span class="label">Estimasi Penghasilan</span>
-                        <div class="value">Rp {pending_penghasilan:,.0f}</div>
-                        <div class="sub">Omzet setelah biaya</div>
-                    </div>
-                    <div class="section-metric-card metric-orange">
-                        <span class="label">Estimasi HPP</span>
-                        <div class="value">Rp {pending_hpp:,.0f}</div>
-                        <div class="sub">Modal produk pending</div>
-                    </div>
-                    <div class="section-metric-card {pending_laba_class}">
-                        <span class="label">Proyeksi Laba Bersih</span>
-                        <div class="value">Rp {pending_laba:,.0f}</div>
-                        <div class="sub">Penghasilan - HPP</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
             chart_df = _build_daily_chart_data(daily_order_file, result, hpp_lookup)
             if not chart_df.empty:
