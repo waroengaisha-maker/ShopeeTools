@@ -327,51 +327,117 @@ def _build_daily_chart_data(order_file_path, result_df, hpp_lookup_map):
         df_order['Waktu Pesanan Dibuat'] = pd.to_datetime(df_order['Waktu Pesanan Dibuat'], errors='coerce')
         df_order = df_order.dropna(subset=['Waktu Pesanan Dibuat'])
         df_order = df_order[~df_order['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
-        df_order = df_order[df_order['No. Resi'].notna()]
-        if df_order.empty:
+        df_order = df_order[df_order['No. Resi'].notna()].copy()
+        if df_order.empty or result_df is None or result_df.empty:
             return pd.DataFrame()
 
-        if result_df is not None and not result_df.empty and 'No. Pesanan' in result_df.columns:
-            result_map = result_df.set_index('No. Pesanan')
-            settled_ids = set(result_df.loc[result_df['Is_Settled'] == True, 'No. Pesanan'].astype(str).unique()) if 'Is_Settled' in result_df.columns else set()
-        else:
-            result_map = None
-            settled_ids = set()
-
         df_order['No. Pesanan'] = df_order['No. Pesanan'].astype(str)
+        result_df = result_df.copy()
+        if 'No. Pesanan' not in result_df.columns:
+            return pd.DataFrame()
+        result_df['No. Pesanan'] = result_df['No. Pesanan'].astype(str)
+
         daily_rows = []
         for day, chunk in df_order.groupby(df_order['Waktu Pesanan Dibuat'].dt.date):
-            order_ids = chunk['No. Pesanan'].dropna().astype(str).unique().tolist()
-            if result_map is not None:
-                subset = result_df[result_df['No. Pesanan'].astype(str).isin(order_ids)].copy()
-            else:
-                subset = pd.DataFrame()
-            omzet = int(subset['Subtotal'].sum()) if not subset.empty and 'Subtotal' in subset.columns else 0
-            biaya = int(subset['Total Biaya'].sum()) if not subset.empty and 'Total Biaya' in subset.columns else 0
-            penghasilan = int(subset[subset['Is_Settled'] == True]['Subtotal'].sum() + subset[subset['Is_Settled'] == True]['Total Biaya'].sum()) if not subset.empty and 'Is_Settled' in subset.columns else omzet + biaya
-            hpp = 0
-            if not subset.empty and hpp_lookup_map and 'Nama Produk' in subset.columns:
-                def _row_hpp(row):
-                    info = hpp_lookup_map.get(row['Nama Produk'], {})
-                    harga_pokok = info.get('HargaPokok', 0)
-                    konversi = info.get('Konversi', 1) or 1
-                    return row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)
-                hpp = int(round(subset[subset['Is_Settled'] == True].apply(_row_hpp, axis=1).sum())) if 'Is_Settled' in subset.columns else 0
+            order_ids = chunk['No. Pesanan'].dropna().unique().tolist()
+            subset = result_df[result_df['No. Pesanan'].isin(order_ids)].copy()
+            if subset.empty:
+                continue
+
+            settled_subset = subset[subset['Is_Settled'] == True].copy() if 'Is_Settled' in subset.columns else subset.copy()
+            omzet = int(settled_subset['Subtotal'].sum()) if 'Subtotal' in settled_subset.columns else 0
+            biaya = int(settled_subset['Total Biaya'].sum()) if 'Total Biaya' in settled_subset.columns else 0
+            penghasilan = omzet + biaya
+
+            def _row_hpp(row):
+                info = hpp_lookup_map.get(row.get('Nama Produk'), {})
+                harga_pokok = info.get('HargaPokok', 0)
+                konversi = info.get('Konversi', 1) or 1
+                return row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)
+
+            hpp = int(round(settled_subset.apply(_row_hpp, axis=1).sum())) if not settled_subset.empty and hpp_lookup_map else 0
             laba = penghasilan - hpp
+
             daily_rows.append({
                 'Tanggal': pd.to_datetime(day),
                 'Omzet': omzet,
+                'Biaya': abs(biaya),
+                'Penghasilan': penghasilan,
                 'HPP': hpp,
                 'Laba': laba,
-                'Penghasilan': penghasilan,
             })
 
-        chart_df = pd.DataFrame(daily_rows).sort_values('Tanggal')
-        if not chart_df.empty:
-            chart_df['TanggalLabel'] = chart_df['Tanggal'].dt.strftime('%d %b').str.lstrip('0')
+        chart_df = pd.DataFrame(daily_rows)
+        if chart_df.empty:
+            return pd.DataFrame()
+
+        chart_df = chart_df.sort_values('Tanggal').reset_index(drop=True)
+        day_names = {0: 'Sen', 1: 'Sel', 2: 'Rab', 3: 'Kam', 4: 'Jum', 5: 'Sab', 6: 'Min'}
+        chart_df['Hari'] = chart_df['Tanggal'].dt.dayofweek.map(day_names)
+        chart_df['TanggalLabel'] = chart_df.apply(
+            lambda r: f"{r['Hari']}, {r['Tanggal'].day} {r['Tanggal'].strftime('%b')}",
+            axis=1,
+        )
         return chart_df
     except Exception as exc:
         LOGGER.warning("Daily chart build failed for %s: %s", order_file_path, exc)
+        return pd.DataFrame()
+
+
+def _build_daily_transaction_detail(order_file_path, result_df, selected_date, hpp_lookup_map=None):
+    if not order_file_path or not Path(order_file_path).exists() or selected_date is None:
+        return pd.DataFrame()
+
+    try:
+        usecols = ['Waktu Pesanan Dibuat', 'Status Pesanan', 'No. Resi', 'No. Pesanan', 'Nama Produk', 'Nama Variasi']
+        df_order = pd.read_excel(order_file_path, sheet_name='orders', usecols=usecols)
+        df_order['Waktu Pesanan Dibuat'] = pd.to_datetime(df_order['Waktu Pesanan Dibuat'], errors='coerce')
+        df_order = df_order.dropna(subset=['Waktu Pesanan Dibuat'])
+        df_order = df_order[~df_order['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
+        df_order = df_order[df_order['No. Resi'].notna()].copy()
+        df_order['Tanggal'] = df_order['Waktu Pesanan Dibuat'].dt.date
+        target_date = pd.to_datetime(selected_date).date()
+        df_day = df_order[df_order['Tanggal'] == target_date].copy()
+        if df_day.empty or result_df is None or result_df.empty:
+            return pd.DataFrame()
+
+        result_day = result_df[result_df['No. Pesanan'].astype(str).isin(df_day['No. Pesanan'].astype(str))].copy()
+        if result_day.empty:
+            return pd.DataFrame()
+
+        result_day['Tanggal'] = pd.to_datetime(selected_date)
+        def _row_hpp(row):
+            if not hpp_lookup_map:
+                return 0
+            info = hpp_lookup_map.get(row.get('Nama Produk'), {})
+            harga_pokok = info.get('HargaPokok', 0)
+            konversi = info.get('Konversi', 1) or 1
+            return int(round(row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)))
+
+        detail = result_day.copy()
+        detail['HPP (@)'] = detail.apply(
+            lambda row: int(round(
+                hpp_lookup_map.get(row.get('Nama Produk'), {}).get('HargaPokok', 0)
+                / (hpp_lookup_map.get(row.get('Nama Produk'), {}).get('Konversi', 1) or 1)
+            )) if hpp_lookup_map else 0,
+            axis=1,
+        )
+        detail['HPP'] = detail.apply(_row_hpp, axis=1).astype(int)
+        detail['Laba Bersih'] = (
+            pd.to_numeric(detail.get('Subtotal', 0), errors='coerce').fillna(0).astype(int)
+            + pd.to_numeric(detail.get('Total Biaya', 0), errors='coerce').fillna(0).astype(int)
+            - detail['HPP']
+        )
+        cols = [
+            'No. Pesanan', 'Nama Produk', 'Jumlah', 'Returned quantity', 'Jumlah Bersih',
+            'Subtotal', 'Total Biaya', 'HPP (@)', 'HPP', 'Laba Bersih', 'Is_Settled'
+        ]
+        detail = detail[[c for c in cols if c in detail.columns]].copy()
+        if 'No. Pesanan' in detail.columns:
+            detail.insert(0, 'Tanggal', pd.to_datetime(selected_date).date())
+        return detail
+    except Exception as exc:
+        LOGGER.warning("Daily transaction detail build failed for %s: %s", selected_date, exc)
         return pd.DataFrame()
 
 # ─── Custom CSS untuk tampilan premium ───
@@ -624,6 +690,55 @@ html, body, [class*="css"] {
 .kpi-hpp .value { color: #f97316; }
 .kpi-profit .value { color: #10b981; }
 .kpi-margin .value { color: #c084fc; }
+.kpi-row-triplet {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+.daily-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.daily-summary-grid .kpi-row-triplet {
+    display: contents;
+}
+.kpi-chip {
+    display: inline-block;
+    margin-top: 0.5rem;
+    padding: 0.32rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(99, 102, 241, 0.18);
+    color: #c7d2fe;
+    font-size: 0.74rem;
+    font-weight: 700;
+}
+.weakest-product-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    margin-top: 0.15rem;
+}
+.weakest-product-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 1rem;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.weakest-product-laba {
+    flex: 0 0 auto;
+    font-size: 0.92rem;
+    color: #cbd5e1;
+    white-space: nowrap;
+}
+.kpi-row-inline {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+}
 
 /* Tautan navigasi dapat dibuka pada tab baru lewat Ctrl/Cmd+klik atau klik kanan. */
 .sidebar-nav-link {
@@ -687,6 +802,22 @@ with st.sidebar:
     )
     st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
     st.divider()
+
+    if menu == "dashboard":
+        st.markdown("⚙️ **Dashboard Setting**")
+        if 'laba_warn_threshold' not in st.session_state:
+            st.session_state.laba_warn_threshold = 10000
+        st.session_state.laba_warn_threshold = st.number_input(
+            "Threshold laba kuning",
+            min_value=0,
+            max_value=1000000,
+            value=int(st.session_state.laba_warn_threshold),
+            step=1000,
+            key="laba_warn_threshold_sidebar",
+            help="Nilai laba bersih sampai batas ini akan diberi warna kuning. Di atasnya hijau.",
+        )
+        st.caption("Dipakai untuk warna kolom Laba Bersih di detail transaksi harian.")
+        st.divider()
 
 
 # ==============================================================================
@@ -799,11 +930,190 @@ if menu == "dashboard":
                 chart_view = chart_df.set_index('TanggalLabel')[['Omzet', 'HPP', 'Laba']]
                 st.line_chart(chart_view, height=320)
                 with st.expander("Lihat data harian", expanded=False):
+                    daily_display = chart_df[['TanggalLabel', 'Omzet', 'Biaya', 'Penghasilan', 'HPP', 'Laba']].copy()
                     st.dataframe(
-                        chart_df[['TanggalLabel', 'Omzet', 'HPP', 'Laba', 'Penghasilan']],
+                        daily_display,
                         use_container_width=True,
                         hide_index=True,
+                        column_config={
+                            'TanggalLabel': st.column_config.TextColumn('Tanggal'),
+                            'Omzet': st.column_config.NumberColumn('Omzet', format='%,d'),
+                            'Biaya': st.column_config.NumberColumn('Biaya', format='%,d'),
+                            'Penghasilan': st.column_config.NumberColumn('Penghasilan', format='%,d'),
+                            'HPP': st.column_config.NumberColumn('HPP', format='%,d'),
+                            'Laba': st.column_config.NumberColumn('Laba', format='%,d'),
+                        },
                     )
+                    detail_labels = chart_df['TanggalLabel'].tolist()
+                    selected_detail_label = st.selectbox("Detail transaksi per hari", detail_labels, key="daily_detail_day")
+                    selected_row = chart_df.loc[chart_df['TanggalLabel'] == selected_detail_label].iloc[0]
+                    selected_detail_date = selected_row['Tanggal']
+                    detail_df = _build_daily_transaction_detail(daily_order_file, result, selected_detail_date, hpp_lookup)
+                    if not detail_df.empty:
+                        st.caption(f"Detail transaksi untuk {selected_detail_label}")
+                        total_orders_day = len(detail_df['No. Pesanan'].dropna().astype(str).unique()) if 'No. Pesanan' in detail_df.columns else len(detail_df)
+                        total_items_day = int(detail_df['Jumlah Bersih'].sum()) if 'Jumlah Bersih' in detail_df.columns else 0
+                        omzet_day = int(selected_row.get('Omzet', 0))
+                        biaya_day = int(selected_row.get('Biaya', 0))
+                        penghasilan_day = int(selected_row.get('Penghasilan', 0))
+                        hpp_day = int(selected_row.get('HPP', 0))
+                        laba_day = int(selected_row.get('Laba', 0))
+                        margin_day = (laba_day / penghasilan_day * 100) if penghasilan_day > 0 else 0.0
+                        avg_laba_per_order = (laba_day / total_orders_day) if total_orders_day > 0 else 0.0
+                        weakest_product_name = "-"
+                        weakest_product_laba = 0
+                        if 'Nama Produk' in detail_df.columns and 'Laba Bersih' in detail_df.columns:
+                            product_laba = (
+                                detail_df.groupby('Nama Produk', dropna=False)['Laba Bersih']
+                                .sum()
+                                .sort_values()
+                            )
+                            if not product_laba.empty:
+                                weakest_product_name = str(product_laba.index[0])
+                                weakest_product_laba = int(product_laba.iloc[0])
+                        weakest_product_display = f"{weakest_product_name}<br>Rp {weakest_product_laba:,.0f}"
+                        weakest_product_button = (
+                            "<div class='kpi-chip'>Fokus ke produk ini</div>"
+                            if weakest_product_name != "-" else ""
+                        )
+                        laba_day_color = "#10b981" if laba_day >= 0 else "#f87171"
+                        st.markdown(
+                            f"""
+                            <div class="kpi-grid daily-summary-grid" style="margin-top:0.75rem;">
+                                <div class="kpi-card kpi-gross">
+                                    <span class="label">Order Hari Ini</span>
+                                    <div class="value">{total_orders_day}</div>
+                                    <div class="pct">Jumlah pesanan unik</div>
+                                </div>
+                                <div class="kpi-card kpi-gross">
+                                    <span class="label">Qty Bersih</span>
+                                    <div class="value">{total_items_day}</div>
+                                    <div class="pct">Unit terjual bersih</div>
+                                </div>
+                                <div class="kpi-row-triplet">
+                                    <div class="kpi-card kpi-gross">
+                                        <span class="label">Omzet</span>
+                                        <div class="value">Rp {omzet_day:,.0f}</div>
+                                        <div class="pct">Subtotal settled hari ini</div>
+                                    </div>
+                                    <div class="kpi-card kpi-fee">
+                                        <span class="label">Biaya</span>
+                                        <div class="value">Rp {biaya_day:,.0f}</div>
+                                        <div class="pct">Total fee transaksi hari ini</div>
+                                    </div>
+                                    <div class="kpi-card kpi-net">
+                                        <span class="label">Penghasilan</span>
+                                        <div class="value">Rp {penghasilan_day:,.0f}</div>
+                                        <div class="pct">Setelah biaya Shopee & penyesuaian</div>
+                                    </div>
+                                </div>
+                                <div class="kpi-card kpi-hpp">
+                                    <span class="label">HPP</span>
+                                    <div class="value">Rp {hpp_day:,.0f}</div>
+                                    <div class="pct">Modal barang hari ini</div>
+                                </div>
+                                <div class="kpi-card kpi-profit">
+                                    <span class="label">Laba Bersih</span>
+                                    <div class="value" style="color: {laba_day_color};">Rp {laba_day:,.0f}</div>
+                                    <div class="pct">Penghasilan - HPP</div>
+                                </div>
+                                <div class="kpi-card kpi-margin">
+                                    <span class="label">Margin Hari Ini</span>
+                                    <div class="value">{margin_day:.1f}%</div>
+                                    <div class="pct">Laba ÷ penghasilan</div>
+                                </div>
+                                <div class="kpi-card kpi-fee">
+                                    <span class="label">Laba / Order</span>
+                                    <div class="value">Rp {avg_laba_per_order:,.0f}</div>
+                                    <div class="pct">Rata-rata per pesanan</div>
+                                </div>
+                                <div class="kpi-card kpi-gross">
+                                    <span class="label">Produk Terlemah</span>
+                                    <div class="weakest-product-line">
+                                        <div class="weakest-product-name">{weakest_product_name}</div>
+                                        <div class="weakest-product-laba">Rp {weakest_product_laba:,.0f}</div>
+                                    </div>
+                                    {weakest_product_button}
+                                    <div class="pct">Total laba terendah hari ini</div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        product_focus_options = ['Semua Produk']
+                        if 'Nama Produk' in detail_df.columns:
+                            product_focus_options.extend(sorted(detail_df['Nama Produk'].dropna().astype(str).unique().tolist()))
+                        default_product_focus = weakest_product_name if weakest_product_name in product_focus_options else 'Semua Produk'
+                        if weakest_product_name in product_focus_options and st.button("Fokus ke produk ini", key="focus_weakest_product"):
+                            st.session_state.daily_detail_product_focus = weakest_product_name
+                            st.rerun()
+                        selected_product_focus = st.selectbox(
+                            "Fokus produk detail",
+                            product_focus_options,
+                            index=product_focus_options.index(default_product_focus) if default_product_focus in product_focus_options else 0,
+                            key="daily_detail_product_focus",
+                            help="Pilih produk untuk menyaring detail transaksi hari terpilih.",
+                        )
+                        if selected_product_focus != 'Semua Produk' and 'Nama Produk' in detail_df.columns:
+                            detail_df = detail_df[detail_df['Nama Produk'].astype(str) == selected_product_focus].copy()
+                            if detail_df.empty:
+                                st.info("Tidak ada transaksi untuk produk yang dipilih pada hari ini.")
+                                st.stop()
+
+                        laba_warn_threshold = int(st.session_state.get('laba_warn_threshold', 10000))
+                        def _style_hpp_cell(value):
+                            if pd.isna(value) or value == 0:
+                                return 'background-color: rgba(245, 158, 11, 0.18); color: #fde68a; font-weight: 700;'
+                            return ''
+
+                        def _style_laba_cell(value):
+                            if pd.isna(value):
+                                return ''
+                            if value < 0:
+                                return 'background-color: rgba(239, 68, 68, 0.18); color: #fecaca; font-weight: 700;'
+                            if value <= laba_warn_threshold:
+                                return 'background-color: rgba(234, 179, 8, 0.18); color: #fef08a; font-weight: 700;'
+                            return 'background-color: rgba(16, 185, 129, 0.12); color: #bbf7d0; font-weight: 700;'
+
+                        styled_detail_df = (
+                            detail_df.style
+                            .map(_style_hpp_cell, subset=['HPP (@)'])
+                            .map(_style_laba_cell, subset=['Laba Bersih'])
+                        )
+                        st.dataframe(
+                            styled_detail_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                'Tanggal': st.column_config.TextColumn('Tanggal'),
+                                'No. Pesanan': st.column_config.TextColumn('No. Pesanan'),
+                                'Nama Produk': st.column_config.TextColumn('Nama Produk'),
+                                'Jumlah': st.column_config.NumberColumn('Jumlah', format='%,d'),
+                                'Returned quantity': st.column_config.NumberColumn('Retur', format='%,d'),
+                                'Jumlah Bersih': st.column_config.NumberColumn('Qty Bersih', format='%,d'),
+                                'Subtotal': st.column_config.NumberColumn('Omzet', format='%,d'),
+                                'Total Biaya': st.column_config.NumberColumn(
+                                    'Biaya',
+                                    format='%,d',
+                                    help='Total biaya layanan Shopee, termasuk komponen fee yang tercatat pada transaksi ini.'
+                                ),
+                                'HPP (@)': st.column_config.NumberColumn(
+                                    'HPP (@)',
+                                    format='%,d',
+                                    help='Harga pokok per unit. Nilai 0 berarti produk belum termapping ke master HPP.'
+                                ),
+                                'HPP': st.column_config.NumberColumn(
+                                    'HPP',
+                                    format='%,d',
+                                    help='Total modal barang untuk transaksi ini. Dihitung dari Qty Bersih × HPP per unit.'
+                                ),
+                                'Laba Bersih': st.column_config.NumberColumn(
+                                    'Laba Bersih',
+                                    format='%,d',
+                                    help='Penghasilan - HPP. Ini mengikuti logic accounting aplikasi.'
+                                ),
+                            },
+                        )
 
         filter_options = _build_dashboard_filter_options(result)
         filter_labels = {
