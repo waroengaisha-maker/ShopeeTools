@@ -1237,12 +1237,47 @@ elif menu == "hpp":
                 use_container_width=True
             )
 
+        sort_col1, sort_col2 = st.columns([2, 1])
+        with sort_col1:
+            master_sort_col = st.selectbox(
+                "Urutkan berdasarkan",
+                options=df_raw_master.columns.tolist(),
+                index=df_raw_master.columns.tolist().index('NamaItem') if 'NamaItem' in df_raw_master.columns else 0,
+                key="master_hpp_sort_column",
+            )
+        with sort_col2:
+            master_sort_ascending = st.selectbox(
+                "Arah urutan",
+                options=["Naik (A–Z / kecil ke besar)", "Turun (Z–A / besar ke kecil)"],
+                key="master_hpp_sort_direction",
+            ) == "Naik (A–Z / kecil ke besar)"
+
+        # Kolom angka memakai kunci numerik agar 9.000 diurutkan sebelum 10.000.
+        # Urutan tampilan ini juga menjadi urutan yang disimpan ke master Excel.
+        display_master_df = df_raw_master.copy()
+        numeric_sort_columns = {'Konversi', 'HargaPokok', 'HargaJual'}
+        if master_sort_col in numeric_sort_columns:
+            display_master_df['_sort_key'] = pd.to_numeric(
+                display_master_df[master_sort_col], errors='coerce'
+            )
+            display_master_df = display_master_df.sort_values(
+                '_sort_key', ascending=master_sort_ascending, na_position='last', kind='stable'
+            ).drop(columns=['_sort_key'])
+        else:
+            display_master_df = display_master_df.sort_values(
+                master_sort_col, ascending=master_sort_ascending, na_position='last', kind='stable'
+            )
+
+        # Key berbeda untuk setiap konfigurasi urutan agar perubahan urutan tidak
+        # menerapkan edit sementara ke baris yang kini berada di posisi lain.
+        master_editor_key = f"master_hpp_data_editor_{master_sort_col}_{master_sort_ascending}"
+
         edited_master_df = st.data_editor(
-            df_raw_master,
+            display_master_df,
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
-            key="master_hpp_data_editor",
+            key=master_editor_key,
             column_config={
                 'KodeItem': st.column_config.TextColumn("Kode Item", required=True),
                 'NamaItem': st.column_config.TextColumn("Nama Item", required=True, width="large"),
