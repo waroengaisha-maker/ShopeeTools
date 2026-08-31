@@ -272,9 +272,9 @@ def _find_session_order_file():
     return candidates[0] if candidates else None
 
 
-def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None):
+def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None, settled_fee_ratio=0.0):
     """Menghitung pesanan batal dari file Order, di luar KPI finansial settled."""
-    empty_summary = {'count': 0, 'value': 0, 'rate': 0.0, 'details': pd.DataFrame()}
+    empty_summary = {'count': 0, 'value': 0, 'income_lost': 0, 'rate': 0.0, 'details': pd.DataFrame()}
     if not order_file_path or not Path(order_file_path).exists():
         return empty_summary
 
@@ -306,6 +306,7 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
         quantity = pd.to_numeric(cancelled['Jumlah'], errors='coerce').fillna(0)
         line_value = price * quantity
         cancelled_value = int((price * quantity).sum())
+        income_lost = int(round(cancelled_value * (1 - max(0.0, min(float(settled_fee_ratio), 1.0)))))
         type_candidates = [
             'Tipe Pembatalan', 'Jenis Pembatalan', 'Alasan Pembatalan',
             'Alasan Pembatalan Pesanan', 'Cancellation Type',
@@ -331,6 +332,9 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
                 if type_col else 'Tidak tersedia'
             )
             details['Nilai Transaksi'] = line_value.loc[details.index].round(0).astype(int)
+            details['Estimasi Penghasilan Hilang'] = (
+                details['Nilai Transaksi'] * (1 - max(0.0, min(float(settled_fee_ratio), 1.0)))
+            ).round(0).astype(int)
             details['Waktu Pesanan Dibuat'] = pd.to_datetime(details['Waktu Pesanan Dibuat'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
             if 'Harga Setelah Diskon' in details.columns:
                 details['Harga Setelah Diskon'] = price.loc[details.index].round(0).astype(int)
@@ -339,6 +343,7 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
         return {
             'count': int(cancelled_count),
             'value': cancelled_value,
+            'income_lost': income_lost,
             'rate': (cancelled_count / denominator * 100) if denominator > 0 else 0.0,
             'details': details,
         }
@@ -877,7 +882,7 @@ html, body, [class*="css"] {
     gap: 0.85rem;
     margin: 0.75rem 0 0.8rem 0;
 }
-.risk-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.risk-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .projection-card-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .section-metric-card {
     padding: 0.9rem 1rem;
@@ -1154,6 +1159,7 @@ if menu == "dashboard":
                 daily_order_file,
                 start_date=proc_start,
                 end_date=proc_end,
+                settled_fee_ratio=(abs(total_biaya) / total_omzet if total_omzet > 0 else 0.0),
             )
             st.markdown("### Anomali & Risiko")
             if cancelled_summary['count'] > 0:
@@ -1183,6 +1189,11 @@ if menu == "dashboard":
                         <div class="value">{cancelled_summary['rate']:.2f}%</div>
                         <div class="sub">Dari seluruh order periode ini</div>
                     </div>
+                    <div class="section-metric-card metric-blue">
+                        <span class="label">Estimasi Penghasilan Hilang</span>
+                        <div class="value">Rp {cancelled_summary['income_lost']:,.0f}</div>
+                        <div class="sub">Setelah estimasi fee Shopee</div>
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1203,6 +1214,9 @@ if menu == "dashboard":
                             ),
                             'Nilai Transaksi': st.column_config.NumberColumn(
                                 'Nilai Transaksi', format='Rp %d'
+                            ),
+                            'Estimasi Penghasilan Hilang': st.column_config.NumberColumn(
+                                'Estimasi Penghasilan Hilang', format='Rp %d'
                             ),
                         },
                     )
