@@ -1,2 +1,14 @@
 # Data laporan upload bersifat privat dan dipisahkan per session.
 data/uploads/
+
+# Artefak Python lokal.
+__pycache__/
+*.pyc
+
+# File sementara yang dibuat Excel saat dokumen sedang dibuka.
+~$*.xlsx
+
+# Laporan transaksi Shopee nyata tidak boleh masuk repository. Master HPP
+# contoh/operasional tetap dibagikan agar aplikasi dapat berjalan.
+files/*
+!files/hpp_produk.xlsx
