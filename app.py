@@ -166,28 +166,81 @@ html, body, [class*="css"] {
     color: #99f6e4;
     border: 1px solid rgba(45, 212, 191, 0.35);
 }
+
+/* Tautan navigasi dapat dibuka pada tab baru lewat Ctrl/Cmd+klik atau klik kanan. */
+.sidebar-nav-link {
+    display: block;
+    padding: 0.7rem 0.8rem;
+    margin: 0.35rem 0;
+    border-radius: 8px;
+    color: #cbd5e1 !important;
+    text-decoration: none !important;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+.sidebar-nav-link:hover {
+    background: rgba(99, 102, 241, 0.14);
+    color: #e0e7ff !important;
+}
+.sidebar-nav-link.active {
+    background: rgba(99, 102, 241, 0.22);
+    color: #e0e7ff !important;
+    border-color: rgba(129, 140, 248, 0.42);
+}
+.sidebar-brand-link {
+    color: inherit !important;
+    text-decoration: none !important;
+}
+.sidebar-brand-link:hover {
+    color: #a5b4fc !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ─── Sidebar Navigation ───
+menu = st.query_params.get("page", "dashboard")
+if menu not in {"dashboard", "reconciliation", "hpp"}:
+    menu = "dashboard"
+
 with st.sidebar:
-    st.markdown("## 🏪 **Warung Aisha Tool**")
+    st.markdown(
+        '<h2><a class="sidebar-brand-link" href="?" target="_self">🏪 Warung Aisha Tool</a></h2>',
+        unsafe_allow_html=True,
+    )
     st.caption("Alat Analisis & Manajemen Penjualan Shopee")
     st.divider()
 
-    menu = st.radio(
-        "📌 **Pilih Menu Navigasi:**",
-        ["📊 Rekonsiliasi Shopee", "📦 Kelola Master HPP"],
-        index=0,
-        key="main_navigation"
+    st.markdown("📌 **Navigasi**")
+    dashboard_active = " active" if menu == "dashboard" else ""
+    reconciliation_active = " active" if menu == "reconciliation" else ""
+    hpp_active = " active" if menu == "hpp" else ""
+    st.markdown(
+        f'<a class="sidebar-nav-link{dashboard_active}" href="?" target="_self">🏠 Dashboard</a>',
+        unsafe_allow_html=True,
     )
+    st.markdown(
+        f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=reconciliation" target="_self">📊 Rekonsiliasi Shopee</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<a class="sidebar-nav-link{hpp_active}" href="?page=hpp" target="_self">📦 Kelola Master HPP</a>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
     st.divider()
 
 
 # ==============================================================================
-# 📊 MENU 1: REKONSILIASI SHOPEE
+# 🏠 MENU 1: DASHBOARD (belum ada konten)
 # ==============================================================================
-if menu == "📊 Rekonsiliasi Shopee":
+if menu == "dashboard":
+    pass
+
+
+# ==============================================================================
+# 📊 MENU 2: REKONSILIASI SHOPEE
+# ==============================================================================
+elif menu == "reconciliation":
     st.title("📊 Rekonsiliasi Transaksi & Margin Shopee")
     st.write("Upload laporan Order dan Laporan Penghasilan Shopee untuk melihat analisis keuangan, fee, dan margin laba.")
 
@@ -971,9 +1024,9 @@ if menu == "📊 Rekonsiliasi Shopee":
 
 
 # ==============================================================================
-# 📦 MENU 2: KELOLA MASTER HPP
+# 📦 MENU 3: KELOLA MASTER HPP
 # ==============================================================================
-elif menu == "📦 Kelola Master HPP":
+elif menu == "hpp":
     st.title("📦 Kelola Master HPP & Pemetaan Multi-Satuan")
     st.write("Kelola database harga pokok toko, satuan/konversi kemasan, dan relasi pemetaan SKU Shopee.")
 
