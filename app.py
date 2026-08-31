@@ -854,6 +854,10 @@ html, body, [class*="css"] {
     color: #f1f5f9;
     font-weight: 700;
 }
+/* Informasi pembatalan disajikan melalui card Anomali & Risiko, bukan alert berulang. */
+[data-testid="stAlert"] {
+    display: none !important;
+}
 .kpi-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -927,6 +931,16 @@ html, body, [class*="css"] {
     font-size: 0.72rem;
     margin-top: 0.3rem;
 }
+.section-parent-card {
+    margin: 1rem 0 0.65rem 0;
+    padding: 0.85rem 1.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+.section-parent-card .title { color: #f8fafc; font-size: 1.05rem; font-weight: 800; }
+.section-parent-card .description { color: #94a3b8; font-size: 0.78rem; margin-top: 0.25rem; }
 .metric-blue .value { color: #38bdf8; }
 .metric-green .value { color: #4ade80; }
 .metric-red .value { color: #f87171; }
@@ -1129,8 +1143,7 @@ if menu == "dashboard":
             unsafe_allow_html=True,
         )
 
-        st.markdown("### Pesanan Settled")
-        st.caption("Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.")
+        st.markdown('<div class="section-parent-card"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
 
         # KPI utama pesanan settled
         if 'result' in st.session_state:
@@ -1173,8 +1186,7 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
 
-            st.markdown("### Proyeksi Pesanan Unsettled")
-            st.caption("Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.")
+            st.markdown('<div class="section-parent-card"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
             pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
             st.markdown(
                 f"""
@@ -1196,7 +1208,7 @@ if menu == "dashboard":
                 end_date=proc_end,
                 settled_fee_ratio=(abs(total_biaya) / total_omzet if total_omzet > 0 else 0.0),
             )
-            st.markdown("### Anomali & Risiko")
+            st.markdown('<div class="section-parent-card"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
                 st.warning(
                     f"Terdapat {cancelled_summary['count']:,} pesanan dibatalkan "
