@@ -1130,8 +1130,6 @@ if menu == "dashboard":
         st.markdown(
             f"""
             <div class="dashboard-hero">
-                <div class="dashboard-kicker">Dashboard Penjualan</div>
-                <div class="dashboard-title">DASHBOARD PENJUALAN</div>
                 <div class="dashboard-meta">
                     <div class="dashboard-meta-card">
                         <span class="label">Range Tanggal Penjualan</span>
@@ -1150,6 +1148,105 @@ if menu == "dashboard":
             """,
             unsafe_allow_html=True,
         )
+
+        # Kesehatan mapping HPP agar angka laba selalu memiliki konteks cakupan biaya.
+        hpp_health_section = st.container(border=True)
+        hpp_health_section.markdown(
+            '<div class="section-parent-card"><div class="title">HPP Health</div>'
+            '<div class="description">Indikator kelengkapan HPP mapping yang menjadi dasar perhitungan laba.</div></div>',
+            unsafe_allow_html=True,
+        )
+        hpp_products = result['Nama Produk'].dropna().astype(str).str.strip().loc[lambda values: values.ne('')].unique()
+        hpp_total_products = len(hpp_products)
+        confirmed_mapping = load_mapping()
+        hpp_valid_products = [
+            product for product in hpp_products
+            if hpp_lookup.get(product, {}).get('HargaPokok', 0) > 0
+        ]
+        hpp_manual_products = [
+            product for product in hpp_valid_products if confirmed_mapping.get(product)
+        ]
+        hpp_auto_valid_count = max(len(hpp_valid_products) - len(hpp_manual_products), 0)
+        hpp_missing_count = max(hpp_total_products - len(hpp_valid_products), 0)
+        hpp_coverage = len(hpp_valid_products) / hpp_total_products * 100 if hpp_total_products else 0
+        hpp_health_section.markdown(
+            f"**HPP Coverage**  \n"
+            f"Produk dengan HPP valid **{hpp_coverage:.1f}%** &nbsp;&nbsp; "
+            f"Produk belum memiliki HPP **{100 - hpp_coverage:.1f}%**"
+        )
+        health_cols = hpp_health_section.columns(3)
+        health_cols[0].metric('🟢 HPP Valid', hpp_auto_valid_count)
+        health_cols[1].metric('🟡 HPP Manual', len(hpp_manual_products))
+        health_cols[2].metric('🔴 HPP Missing', hpp_missing_count)
+
+        # Ranking produk: metrik dapat diganti agar produk tidak dinilai dari omzet saja.
+        top_products_section = st.container(border=True)
+        top_products_section.markdown(
+            '<div class="section-parent-card"><div class="title">Top Products</div>'
+            '<div class="description">🏆 Produk Terlaris — omzet tinggi belum tentu laba tinggi.</div></div>',
+            unsafe_allow_html=True,
+        )
+        ranking_metric = top_products_section.radio(
+            "Urutkan berdasarkan",
+            ["Omzet", "Qty", "Laba", "Margin"],
+            horizontal=True,
+            key="dashboard_top_products_metric",
+        )
+        top_settled = result[result['Is_Settled'] == True].copy() if 'Is_Settled' in result.columns else result.copy()
+        if not top_settled.empty and 'Nama Produk' in top_settled.columns:
+            zero_series = pd.Series(0, index=top_settled.index)
+            top_settled['_qty'] = pd.to_numeric(top_settled.get('Jumlah Bersih', zero_series), errors='coerce').fillna(0)
+            top_settled['_omzet'] = pd.to_numeric(top_settled.get('Subtotal', zero_series), errors='coerce').fillna(0)
+            top_settled['_income'] = top_settled['_omzet'] + pd.to_numeric(top_settled.get('Total Biaya', zero_series), errors='coerce').fillna(0)
+            top_settled['_hpp'] = top_settled.apply(
+                lambda row: row['_qty'] * (
+                    hpp_lookup.get(row['Nama Produk'], {}).get('HargaPokok', 0)
+                    / (hpp_lookup.get(row['Nama Produk'], {}).get('Konversi', 1) or 1)
+                ), axis=1,
+            )
+            top_products = top_settled.groupby('Nama Produk', dropna=False).agg(
+                Qty=('_qty', 'sum'), Omzet=('_omzet', 'sum'),
+                _income=('_income', 'sum'), _hpp=('_hpp', 'sum'),
+            ).reset_index()
+            top_products['Laba'] = top_products['_income'] - top_products['_hpp']
+            top_products['Margin'] = top_products.apply(
+                lambda row: row['Laba'] / row['Omzet'] * 100 if row['Omzet'] > 0 else 0, axis=1
+            )
+
+            profitability_section = st.container(border=True)
+            profitability_section.markdown(
+                '<div class="section-parent-card"><div class="title">Produk Paling Menguntungkan</div>'
+                '<div class="description">Fokus pada margin laba untuk membantu menentukan produk yang perlu dipertahankan atau dievaluasi.</div></div>',
+                unsafe_allow_html=True,
+            )
+            champion_col, lowest_col = profitability_section.columns(2)
+            champion = top_products.nlargest(5, 'Margin')[['Nama Produk', 'Margin']].copy()
+            lowest = top_products.nsmallest(5, 'Margin')[['Nama Produk', 'Margin']].copy()
+            for profit_frame in [champion, lowest]:
+                profit_frame['Margin'] = profit_frame['Margin'].map(lambda value: f"{value:,.1f}%")
+                profit_frame.rename(columns={'Nama Produk': 'Produk'}, inplace=True)
+            champion_col.markdown('#### 💎 Profit Champion')
+            champion_col.dataframe(champion, use_container_width=True, hide_index=True)
+            lowest_col.markdown('#### 🚨 Margin Terendah')
+            lowest_col.dataframe(lowest, use_container_width=True, hide_index=True)
+
+            sort_column = {'Omzet': 'Omzet', 'Qty': 'Qty', 'Laba': 'Laba', 'Margin': 'Margin'}[ranking_metric]
+            top_products = top_products.sort_values(sort_column, ascending=False).head(10).reset_index(drop=True)
+            top_products.insert(0, '#', range(1, len(top_products) + 1))
+            top_products = top_products.rename(columns={'Nama Produk': 'Produk'})
+            top_products['Qty'] = top_products['Qty'].map(lambda value: f"{value:,.0f}")
+            for amount_column in ['Omzet', 'Laba']:
+                top_products[amount_column] = top_products[amount_column].map(
+                    lambda value: f"Rp {value:,.0f}"
+                )
+            top_products['Margin'] = top_products['Margin'].map(lambda value: f"{value:,.1f}%")
+            top_products_section.dataframe(
+                top_products[['#', 'Produk', 'Qty', 'Omzet', 'Laba', 'Margin']],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            top_products_section.info('Belum ada data produk settled untuk dibuat ranking.')
 
         settled_section = st.container(border=True)
         settled_section.markdown('<div class="section-parent-card"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
