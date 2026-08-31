@@ -207,12 +207,6 @@ def _load_session_result():
 
 def _format_processed_period(start_date, end_date):
     if start_date and end_date:
-        if start_date.month == end_date.month and start_date.year == end_date.year:
-            month_names = [
-                "Januari", "Februari", "Maret", "April", "Mei", "Juni",
-                "Juli", "Agustus", "September", "Oktober", "November", "Desember"
-            ]
-            return f"{month_names[start_date.month - 1]} {start_date.year}"
         return f"{start_date.strftime('%d %b %Y')} - {end_date.strftime('%d %b %Y')}"
     return "-"
 
@@ -927,7 +921,7 @@ if menu == "dashboard":
                 <div class="dashboard-title">DASHBOARD PENJUALAN</div>
                 <div class="dashboard-meta">
                     <div class="dashboard-meta-card">
-                        <span class="label">Periode</span>
+                        <span class="label">Range Tanggal Penjualan</span>
                         <div class="value">{period_text}</div>
                     </div>
                     <div class="dashboard-meta-card ok">
