@@ -80,6 +80,17 @@ def _validate_report_upload(uploaded_file, report_type):
         except Exception:
             pass
 
+
+@st.cache_data(show_spinner=False)
+def _cached_reconciliation(order_bytes, income_bytes, start_date, end_date):
+    """Cache hasil rekonsiliasi berdasarkan isi file dan rentang tanggal."""
+    return process_reconciliation(
+        io.BytesIO(order_bytes),
+        io.BytesIO(income_bytes),
+        start_date=start_date,
+        end_date=end_date,
+    )
+
 # Setiap browser session memiliki ruang upload sendiri. Token ikut disimpan di
 # URL agar unggahan tetap dapat ditemukan setelah halaman dimuat ulang atau
 # pengguna berpindah menu melalui tautan navigasi.
@@ -1167,9 +1178,28 @@ if menu == "dashboard":
         st.caption("Unggah laporan Order dan Penghasilan Shopee, lalu proses untuk mengisi dashboard.")
         dashboard_order = st.file_uploader("Laporan Order Shopee (.xlsx)", type=["xlsx"], key="order_uploader")
         dashboard_income = st.file_uploader("Laporan Penghasilan Shopee (.xlsx)", type=["xlsx"], key="income_uploader")
+        dashboard_start_input = None
+        dashboard_end_input = None
+        if dashboard_order is not None:
+            try:
+                order_min_date, order_max_date = get_order_date_bounds(dashboard_order)
+                dashboard_start_input = st.date_input("Tanggal Mulai", value=order_min_date, min_value=order_min_date, max_value=order_max_date, key="dashboard_date_start")
+                dashboard_end_input = st.date_input("Tanggal Akhir", value=order_max_date, min_value=order_min_date, max_value=order_max_date, key="dashboard_date_end")
+            except Exception:
+                st.warning("Rentang tanggal belum dapat dibaca dari file Order.")
+        dashboard_submit = False
+        if dashboard_order is not None and dashboard_income is not None:
+            dashboard_submit = st.button(
+                "Proses Rekonsiliasi & Tampilkan Dashboard",
+                type="primary",
+                use_container_width=True,
+            )
         if dashboard_order is not None:
             st.session_state.uploaded_order_bytes = persist_session_order_upload(dashboard_order)
             st.session_state.uploaded_order_name = dashboard_order.name
+        if dashboard_income is not None:
+            st.session_state.uploaded_income_name = dashboard_income.name
+            st.session_state.uploaded_income_bytes = dashboard_income.getvalue()
         if dashboard_order is not None and dashboard_income is not None:
             order_valid, order_message = _validate_report_upload(dashboard_order, "order")
             income_valid, income_message = _validate_report_upload(dashboard_income, "income")
@@ -1177,28 +1207,76 @@ if menu == "dashboard":
                 st.error(f"Laporan Order tidak valid: {order_message}")
             if not income_valid:
                 st.error(f"Laporan Penghasilan tidak valid: {income_message}")
-            dashboard_start, dashboard_end = get_order_date_bounds(dashboard_order) if order_valid else (None, None)
-            if order_valid and income_valid and st.button("🚀 Proses Rekonsiliasi & Tampilkan Dashboard", type="primary", use_container_width=True):
+            dashboard_start, dashboard_end = (dashboard_start_input, dashboard_end_input) if order_valid else (None, None)
+            if order_valid and income_valid and dashboard_submit and dashboard_start <= dashboard_end:
                 dashboard_order.seek(0)
                 dashboard_income.seek(0)
                 try:
+                    progress = st.progress(0, text="Menyiapkan proses rekonsiliasi...")
                     with st.spinner("Memproses data transaksi..."):
-                        st.session_state.result = process_reconciliation(dashboard_order, dashboard_income, start_date=dashboard_start, end_date=dashboard_end)
+                        progress.progress(25, text="Membaca file Order dan Income...")
+                        st.session_state.result = _cached_reconciliation(dashboard_order.getvalue(), dashboard_income.getvalue(), dashboard_start, dashboard_end)
+                        progress.progress(75, text="Menghitung ringkasan dan biaya...")
                         dashboard_income.seek(0)
                         st.session_state.df_adjustments = extract_adjustments(dashboard_income)
                         st.session_state.processed_start_date = dashboard_start
                         st.session_state.processed_end_date = dashboard_end
                         st.session_state.processed_at = datetime.now(ZoneInfo("Asia/Jakarta"))
                         _save_session_result()
+                    progress.progress(100, text="Selesai")
                     st.rerun()
                 except Exception as exc:
                     st.error("Rekonsiliasi gagal dijalankan. Periksa kembali jenis dan isi file.")
                     st.exception(exc)
+            elif dashboard_submit and dashboard_start > dashboard_end:
+                st.error("Tanggal Mulai tidak boleh lebih besar dari Tanggal Akhir.")
         elif _load_session_result():
             st.rerun()
         else:
             st.info("Unggah kedua file untuk memulai dashboard.")
     else:
+        with st.expander("Ganti File / Periode Data", expanded=True):
+            active_order_name = st.session_state.get("uploaded_order_name", "Belum ada")
+            active_income_name = st.session_state.get("uploaded_income_name", "Belum ada")
+            active_start = st.session_state.get("processed_start_date", "-")
+            active_end = st.session_state.get("processed_end_date", "-")
+            st.info(f"Data aktif — Order: **{active_order_name}** · Income: **{active_income_name}** · Periode: **{active_start} s.d. {active_end}**")
+            replace_order = st.file_uploader("Laporan Order aktif / baru (.xlsx)", type=["xlsx"], key="order_uploader")
+            replace_income = st.file_uploader("Laporan Income aktif / baru (.xlsx)", type=["xlsx"], key="income_uploader")
+            with st.form("dashboard_reprocess_form"):
+                replace_start = active_start if active_start != "-" else datetime.now().date()
+                replace_end = active_end if active_end != "-" else replace_start
+                if replace_order is not None:
+                    try:
+                        replace_min, replace_max = get_order_date_bounds(replace_order)
+                        replace_start = st.date_input("Tanggal Mulai", replace_min, min_value=replace_min, max_value=replace_max, key="replace_date_start")
+                        replace_end = st.date_input("Tanggal Akhir", replace_max, min_value=replace_min, max_value=replace_max, key="replace_date_end")
+                    except Exception as exc:
+                        st.error(f"Rentang tanggal tidak dapat dibaca: {exc}")
+                else:
+                    replace_start = st.date_input("Tanggal Mulai", replace_start, key="replace_date_start_active")
+                    replace_end = st.date_input("Tanggal Akhir", replace_end, key="replace_date_end_active")
+                replace_submit = st.form_submit_button("Proses Ulang dengan Filter Tanggal", type="primary", use_container_width=True)
+            if replace_submit and replace_start <= replace_end:
+                try:
+                    order_bytes = replace_order.getvalue() if replace_order is not None else st.session_state.uploaded_order_bytes
+                    income_bytes = replace_income.getvalue() if replace_income is not None else st.session_state.uploaded_income_bytes
+                    if replace_order is not None:
+                        st.session_state.uploaded_order_bytes = persist_session_order_upload(replace_order)
+                        st.session_state.uploaded_order_name = replace_order.name
+                    if replace_income is not None:
+                        st.session_state.uploaded_income_name = replace_income.name
+                        st.session_state.uploaded_income_bytes = income_bytes
+                    with st.spinner("Memproses data baru..."):
+                        st.session_state.result = _cached_reconciliation(order_bytes, income_bytes, replace_start, replace_end)
+                        st.session_state.processed_start_date = replace_start
+                        st.session_state.processed_end_date = replace_end
+                        st.session_state.processed_at = datetime.now(ZoneInfo("Asia/Jakarta"))
+                        _save_session_result()
+                    st.rerun()
+                except Exception as exc:
+                    st.error("Data baru gagal diproses.")
+                    st.exception(exc)
         result = st.session_state.result
         proc_start = st.session_state.get('processed_start_date')
         proc_end = st.session_state.get('processed_end_date')
