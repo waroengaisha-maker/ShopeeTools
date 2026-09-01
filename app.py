@@ -1389,6 +1389,8 @@ if menu == "dashboard":
                 pass
             overview_section = overview_slot.container(border=True)
             total_order_count = order_audit['No. Pesanan'].nunique() if not order_audit.empty else 0
+            settled_order_count = result.loc[result['Is_Settled'] == True, 'No. Pesanan'].nunique() if 'Is_Settled' in result.columns else 0
+            pending_order_count = result.loc[result['Is_Settled'] == False, 'No. Pesanan'].nunique() if 'Is_Settled' in result.columns else 0
             seller_cancel_rate = (
                 cancelled_summary['seller_count'] / total_order_count * 100
                 if total_order_count > 0 else 0
@@ -1420,23 +1422,24 @@ if menu == "dashboard":
                 recent_order_count = int(recent_orders['No. Pesanan'].nunique())
                 unresolved_7d_rate = unresolved_7d_count / recent_order_count * 100 if recent_order_count else 0.0
             overview_section.markdown(
-                '<div class="section-parent-card section-order-overview"><div class="title">Overview Shopee</div>'
-                '<div class="description">Angka referensi langsung untuk mencocokkan ringkasan Overview Shopee.</div></div>',
+                '<div class="section-parent-card section-order-overview"><div class="title">Overview</div>'
+                '<div class="description">Ringkasan penjualan, pesanan, dan laba toko pada periode yang dipilih.</div></div>',
                 unsafe_allow_html=True,
             )
             overview_section.markdown(
                 f'''<div class="section-card-grid risk-card-grid">
-                    <div class="section-metric-card metric-blue"><span class="label">Total Penjualan / Gross Sales</span><div class="value">Rp {order_file_total:,.0f}</div><div class="sub">Net Sales + Nilai Pesanan Batal</div></div>
-                    <div class="section-metric-card metric-green"><span class="label">Net Sales</span><div class="value">Rp {net_sales_shopee:,.0f}</div><div class="sub">Pesanan Settled + Pending</div></div>
-                    <div class="section-metric-card metric-blue"><span class="label">Pesanan Settled</span><div class="value">Rp {total_omzet:,.0f}</div><div class="sub">Masuk penghasilan aktual</div></div>
-                    <div class="section-metric-card metric-orange"><span class="label">Pesanan Pending</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">Masih menunggu settlement</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Total Penjualan / Gross Sales</span><div class="value">Rp {order_file_total:,.0f}</div><div class="sub">{total_order_count:,} order · Net Sales + Nilai Pesanan Batal</div></div>
+                    <div class="section-metric-card metric-green"><span class="label">Net Sales</span><div class="value">Rp {net_sales_shopee:,.0f}</div><div class="sub">{settled_order_count + pending_order_count:,} order · Settled + Pending</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Pesanan Settled</span><div class="value">Rp {total_omzet:,.0f}</div><div class="sub">{settled_order_count:,} order · Masuk penghasilan aktual</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Pesanan Pending</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">{pending_order_count:,} order · Masih menunggu settlement</div></div>
+                    <div class="section-metric-card metric-green"><span class="label">Laba Bersih Settled</span><div class="value">Rp {laba_bersih:,.0f}</div><div class="sub">Laba aktual pesanan settled</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Laba Bersih Unsettled</span><div class="value">Rp {pending_laba:,.0f}</div><div class="sub">Proyeksi laba pesanan pending</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Total Laba Bersih</span><div class="value">Rp {laba_bersih + pending_laba:,.0f}</div><div class="sub">Settled + proyeksi unsettled</div></div>
                     <div class="section-metric-card metric-amber"><span class="label">Valid Tanpa No. Resi</span><div class="value">Rp {no_resi_value:,.0f}</div><div class="sub">{no_resi_count:,} pesanan; termasuk Pending</div></div>
-                    <div class="section-metric-card metric-orange"><span class="label">Total Nilai Pembatalan</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Nilai bruto pesanan batal</div></div>
-                    <div class="section-metric-card metric-blue"><span class="label">Total Pesanan</span><div class="value">{total_order_count:,}</div><div class="sub">Semua status pesanan</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Total Nilai Pembatalan</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">{cancelled_summary['count']:,} order · Nilai bruto pesanan batal</div></div>
                 </div>''',
                 unsafe_allow_html=True,
             )
-            overview_section.caption("Gross Sales adalah total subtotal pesanan; Net Sales adalah Settled + Pending.")
             anomaly_section = anomaly_slot.container(border=True)
             anomaly_section.markdown('<div class="section-parent-card section-order-anomaly"><div class="title">Pesanan Batal / Tidak Terselesaikan</div><div class="description">Seluruh informasi pembatalan, return, risiko penalti, dan estimasi dampak finansial.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
@@ -1465,26 +1468,6 @@ if menu == "dashboard":
                 """,
                 unsafe_allow_html=True,
             )
-            with overview_section.expander("Lihat detail rekonsiliasi Gross Sales & Net Sales", expanded=False):
-                sales_detail = pd.DataFrame([
-                    {'Komponen': 'Pesanan Settled', 'Nilai': f"Rp {total_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales dan Laba'},
-                    {'Komponen': 'Pesanan Pending', 'Nilai': f"Rp {pending_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales, laba masih proyeksi'},
-                    {'Komponen': 'Pesanan valid tanpa No. Resi', 'Nilai': f"Rp {no_resi_value:,.0f}", 'Perlakuan': f"{no_resi_count:,} pesanan; termasuk Pending"},
-                    {'Komponen': 'Net Sales', 'Nilai': f"Rp {net_sales_shopee:,.0f}", 'Perlakuan': 'Settled + Pending'},
-                    {'Komponen': 'Gross Sales Shopee', 'Nilai': f"Rp {order_file_total:,.0f}", 'Perlakuan': 'Total subtotal pesanan dari file Order'},
-                ])
-                sales_cards = ''.join(
-                    f'''<div class="section-metric-card metric-blue">
-                        <span class="label">{html.escape(str(row['Komponen']))}</span>
-                        <div class="value">{html.escape(str(row['Nilai']))}</div>
-                        <div class="sub">{html.escape(str(row['Perlakuan']))}</div>
-                    </div>'''
-                    for _, row in sales_detail.iterrows()
-                )
-                st.markdown(
-                    f'<div class="section-card-grid" style="grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">{sales_cards}</div>',
-                    unsafe_allow_html=True,
-                )
             returns_section = st.container(border=True)
             returns_section.markdown(
                 '<div class="section-parent-card"><div class="title">Retur &amp; Pengembalian Dana</div>'
