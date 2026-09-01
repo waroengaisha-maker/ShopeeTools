@@ -327,7 +327,9 @@ def _build_hpp_lookup_for_dashboard(result_df, hpp_source=None):
     if result_df is None or result_df.empty or 'Nama Produk' not in result_df.columns:
         return {}
     all_unique_prods = result_df['Nama Produk'].dropna().unique().tolist()
-    mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
+    # Dashboard hanya memakai mapping yang sudah dikonfirmasi/disimpan.
+    # Auto-suggestion diproses khusus di menu Kelola Master HPP.
+    mapping_dict = load_mapping()
     hpp_by_key = {r['ItemKey']: r.to_dict() for _, r in df_hpp_master.iterrows()}
     return {p: hpp_by_key[k] for p, k in mapping_dict.items() if k in hpp_by_key}
 
@@ -2038,7 +2040,7 @@ elif menu in {"reconciliation", "order"}:
                         recap_hpp_source.seek(0)
                     recap_hpp_master = load_hpp_master(file_source=recap_hpp_source)
                     recap_products = order_filtered["Nama Produk"].dropna().unique().tolist()
-                    recap_mapping = auto_suggest_mapping(recap_products, recap_hpp_master)
+                    recap_mapping = load_mapping()
                     recap_by_key = {r["ItemKey"]: r.to_dict() for _, r in recap_hpp_master.iterrows()}
                     recap_hpp_lookup = {p: recap_by_key[k] for p, k in recap_mapping.items() if k in recap_by_key}
                     recap_table = generate_product_summary(order_filtered, hpp_lookup=recap_hpp_lookup)
@@ -2274,7 +2276,7 @@ elif menu in {"reconciliation", "order"}:
                 hpp_source.seek(0)
             df_hpp_master = load_hpp_master(file_source=hpp_source)
             all_unique_prods = result['Nama Produk'].dropna().unique().tolist()
-            mapping_dict = auto_suggest_mapping(all_unique_prods, df_hpp_master)
+            mapping_dict = load_mapping()
             hpp_by_key = {r['ItemKey']: r.to_dict() for _, r in df_hpp_master.iterrows()}
             hpp_lookup = {p: hpp_by_key[k] for p, k in mapping_dict.items() if k in hpp_by_key}
 
