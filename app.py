@@ -1440,6 +1440,7 @@ if menu == "dashboard":
 
             sort_column = {'Omzet': 'Omzet', 'Qty': 'Qty', 'Laba': 'Laba', 'Margin': 'Margin'}[ranking_metric]
             top_products = top_products.sort_values(sort_column, ascending=False).head(10).reset_index(drop=True)
+            total_top_profit = top_products['Laba'].sum()
             top_products.insert(0, '#', range(1, len(top_products) + 1))
             top_products = top_products.rename(columns={
                 'Nama Produk': 'Produk',
@@ -1460,6 +1461,7 @@ if menu == "dashboard":
                 use_container_width=True,
                 hide_index=True,
             )
+            top_products_section.caption(f"Total laba bersih seluruh produk settled: Rp {total_top_profit:,.0f}")
         else:
             top_products_section.info('Belum ada data produk settled untuk dibuat ranking.')
 
