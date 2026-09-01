@@ -19,11 +19,31 @@ import re
 import shutil
 import time
 import uuid
+import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
+
+
+def _read_shopee_stock_excel(uploaded_file):
+    """Baca ekspor stok Shopee, termasuk workbook dengan activePane invalid."""
+    raw = uploaded_file.getvalue()
+    try:
+        return pd.read_excel(io.BytesIO(raw), sheet_name=0, header=2)
+    except ValueError:
+        # Ekspor Shopee tertentu memakai nilai activePane yang ditolak
+        # openpyxl; normalisasi metadata worksheet lalu coba baca ulang.
+        repaired = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(raw), "r") as source, zipfile.ZipFile(repaired, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = re.sub(rb'activePane="(?:topLeft|bottomRight|bottomLeft|topRight|[^\"]+)"', b'activePane="topLeft"', data)
+                target.writestr(item, data)
+        repaired.seek(0)
+        return pd.read_excel(repaired, sheet_name=0, header=2)
 
 # Setiap browser session memiliki ruang upload sendiri. Token ikut disimpan di
 # URL agar unggahan tetap dapat ditemukan setelah halaman dimuat ulang atau
@@ -1037,7 +1057,7 @@ html, body, [class*="css"] {
 
 # ─── Sidebar Navigation ───
 menu = st.query_params.get("page", "dashboard")
-if menu not in {"dashboard", "reconciliation", "hpp"}:
+if menu not in {"dashboard", "reconciliation", "hpp", "stock"}:
     menu = "dashboard"
 session_query = f"session={st.session_state.session_id}"
 
@@ -1053,6 +1073,7 @@ with st.sidebar:
     dashboard_active = " active" if menu == "dashboard" else ""
     reconciliation_active = " active" if menu == "reconciliation" else ""
     hpp_active = " active" if menu == "hpp" else ""
+    stock_active = " active" if menu == "stock" else ""
     st.markdown(
         f'<a class="sidebar-nav-link{dashboard_active}" href="?{session_query}" target="_self">🏠 Dashboard</a>',
         unsafe_allow_html=True,
@@ -1067,6 +1088,11 @@ with st.sidebar:
     )
     st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
     st.divider()
+
+    st.markdown(
+        f'<a class="sidebar-nav-link{stock_active}" href="?page=stock&{session_query}" target="_self">Valuasi Stok</a>',
+        unsafe_allow_html=True,
+    )
 
     if menu == "dashboard":
         st.markdown("⚙️ **Dashboard Setting**")
@@ -2569,6 +2595,66 @@ elif menu == "reconciliation":
 # ==============================================================================
 # 📦 MENU 3: KELOLA MASTER HPP
 # ==============================================================================
+elif menu == "stock":
+    st.title("Valuasi Nilai Stok")
+    st.write("Upload file Mass Update Sales Info Shopee untuk menghitung nilai stok berdasarkan HPP.")
+    upload = st.file_uploader("Upload data stok terkini (.xlsx)", type=["xlsx"], key="stock_valuation_upload")
+    if upload is not None:
+        uploaded_bytes = upload.getvalue()
+        if uploaded_bytes != st.session_state.get("stock_upload_bytes"):
+            st.session_state.stock_valuation_processed = False
+        st.session_state.stock_upload_bytes = uploaded_bytes
+        process_stock = st.button("⚙️ Proses Valuasi Stok", type="primary", key="process_stock_valuation")
+        if process_stock:
+            st.session_state.stock_valuation_processed = True
+    if st.session_state.get("stock_upload_bytes") and st.session_state.get("stock_valuation_processed", False):
+        try:
+            stock = _read_shopee_stock_excel(io.BytesIO(st.session_state.stock_upload_bytes))
+            if not {"Nama Produk", "Stok"}.issubset(stock.columns):
+                st.error("Kolom Nama Produk dan Stok tidak ditemukan.")
+            else:
+                stock = stock[stock["Nama Produk"].notna()].copy()
+                stock["Nama Produk"] = stock["Nama Produk"].astype(str).str.strip()
+                stock["Stok"] = pd.to_numeric(stock["Stok"], errors="coerce").fillna(0)
+                master = load_hpp_master(file_source="files/hpp_produk.xlsx")
+                by_key = {r["ItemKey"]: r.to_dict() for _, r in master.iterrows()}
+                mapping = load_mapping()
+                stock["HPP / Unit"] = stock["Nama Produk"].map(lambda p: (lambda i: i.get("HargaPokok", 0) / (i.get("Konversi", 1) or 1))(by_key.get(mapping.get(p), {})))
+                stock["Nilai Stok"] = stock["Stok"] * stock["HPP / Unit"]
+                stock["Status HPP"] = stock["HPP / Unit"].map(lambda v: "Valid" if v > 0 else "Missing")
+                valid = stock["Status HPP"].eq("Valid")
+                cols = st.columns(4)
+                cols[0].metric("Total Variasi", f"{len(stock):,}")
+                cols[1].metric("Total Unit Stok", f"{stock['Stok'].sum():,.0f}")
+                cols[2].metric("Nilai Stok (HPP Valid)", f"Rp {stock.loc[valid, 'Nilai Stok'].sum():,.0f}")
+                cols[3].metric("HPP Coverage", f"{valid.mean() * 100:.1f}%")
+                st.subheader("Detail Valuasi Stok")
+                show = [c for c in ["Kode Produk", "Nama Produk", "Kode Variasi", "Nama Variasi", "SKU", "Stok", "HPP / Unit", "Nilai Stok", "Status HPP"] if c in stock.columns]
+                editable = stock[show].copy()
+                edited_stock = st.data_editor(
+                    editable,
+                    use_container_width=True,
+                    hide_index=True,
+                    key="stock_valuation_editor",
+                    disabled=[c for c in show if c not in {"Stok", "HPP / Unit"}],
+                    column_config={
+                        "Stok": st.column_config.NumberColumn("Stok", min_value=0, step=1, format="%,.0f"),
+                        "HPP / Unit": st.column_config.NumberColumn("HPP / Unit", min_value=0, step=1, format="Rp %,.0f"),
+                        "Nilai Stok": st.column_config.NumberColumn("Nilai Stok", format="Rp %,.0f"),
+                    },
+                )
+                if {"Stok", "HPP / Unit"}.issubset(edited_stock.columns):
+                    edited_stock["Nilai Stok"] = edited_stock["Stok"] * edited_stock["HPP / Unit"]
+                    edited_stock["Status HPP"] = edited_stock["HPP / Unit"].map(lambda v: "Valid" if v > 0 else "Missing")
+                    edited_valid = edited_stock["Status HPP"].eq("Valid")
+                    st.info(
+                        f"Valuasi setelah edit: **Rp {edited_stock.loc[edited_valid, 'Nilai Stok'].sum():,.0f}** "
+                        f"dari {edited_valid.sum():,} variasi dengan HPP valid."
+                    )
+        except Exception as exc:
+            st.error("File stok tidak dapat dibaca. Detail error:")
+            st.exception(exc)
+
 elif menu == "hpp":
     st.title("📦 Kelola Master HPP & Pemetaan Multi-Satuan")
     st.write("Kelola database harga pokok toko, satuan/konversi kemasan, dan relasi pemetaan SKU Shopee.")
