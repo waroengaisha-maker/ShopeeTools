@@ -950,11 +950,11 @@ html, body, [class*="css"] {
     margin: 1rem 0 1.2rem 0;
 }
 .kpi-card {
-    padding: 1rem 1.05rem;
-    border-radius: 16px;
+    padding: 0.9rem 1rem;
+    border-radius: 14px;
     background: linear-gradient(135deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.92) 100%);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+    box-shadow: none;
 }
 .kpi-card .label {
     display: block;
@@ -966,13 +966,13 @@ html, body, [class*="css"] {
     font-weight: 700;
 }
 .kpi-card .value {
-    font-size: 1.45rem;
+    font-size: 1.2rem;
     line-height: 1.1;
     font-weight: 800;
     color: #f8fafc;
 }
 .kpi-card .pct {
-    font-size: 0.76rem;
+    font-size: 0.72rem;
     color: #cbd5e1;
     margin-top: 0.25rem;
 }
@@ -1251,18 +1251,17 @@ if menu == "dashboard":
             active_start = st.session_state.get("processed_start_date", "-")
             active_end = st.session_state.get("processed_end_date", "-")
             st.info(f"Data aktif — Order: **{active_order_name}** · Income: **{active_income_name}** · Periode: **{active_start} s.d. {active_end}**")
-            upload_col_order, upload_col_income = st.columns(2)
-            with upload_col_order:
-                replace_order = st.file_uploader("Laporan Order aktif / baru (.xlsx)", type=["xlsx"], key="order_uploader")
-            with upload_col_income:
-                replace_income = st.file_uploader("Laporan Income aktif / baru (.xlsx)", type=["xlsx"], key="income_uploader")
             with st.form("dashboard_reprocess_form"):
+                upload_col_order, upload_col_income, date_col_start, date_col_end = st.columns(4)
+                with upload_col_order:
+                    replace_order = st.file_uploader("Laporan Order aktif / baru (.xlsx)", type=["xlsx"], key="order_uploader")
+                with upload_col_income:
+                    replace_income = st.file_uploader("Laporan Income aktif / baru (.xlsx)", type=["xlsx"], key="income_uploader")
                 replace_start = active_start if active_start != "-" else datetime.now().date()
                 replace_end = active_end if active_end != "-" else replace_start
                 if replace_order is not None:
                     try:
                         replace_min, replace_max = get_order_date_bounds(replace_order)
-                        date_col_start, date_col_end = st.columns(2)
                         with date_col_start:
                             replace_start = st.date_input("Tanggal Mulai", replace_min, min_value=replace_min, max_value=replace_max, key="replace_date_start")
                         with date_col_end:
@@ -1270,7 +1269,6 @@ if menu == "dashboard":
                     except Exception as exc:
                         st.error(f"Rentang tanggal tidak dapat dibaca: {exc}")
                 else:
-                    date_col_start, date_col_end = st.columns(2)
                     with date_col_start:
                         replace_start = st.date_input("Tanggal Mulai", replace_start, key="replace_date_start_active")
                     with date_col_end:
@@ -1511,9 +1509,8 @@ if menu == "dashboard":
             projection_section.markdown(
                 f"""
                 <div class="section-card-grid projection-card-grid">
-                    <div class="section-metric-card metric-amber"><span class="label">Pending</span><div class="value">{total_pending:,}</div><div class="sub">Belum settlement</div></div>
-                    <div class="section-metric-card metric-blue"><span class="label">Estimasi Omzet</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">Subtotal pending</div></div>
-                    <div class="section-metric-card metric-red"><span class="label">Estimasi Biaya</span><div class="value">Rp {pending_biaya:,.0f}</div><div class="sub">Estimasi fee Shopee</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Estimasi Omzet Kotor</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">{total_pending:,} pesanan unsettled</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Estimasi Total Biaya Shopee</span><div class="value">Rp {pending_biaya:,.0f}</div><div class="sub">Estimasi fee layanan, admin, dan pajak</div></div>
                     <div class="section-metric-card metric-green"><span class="label">Estimasi Penghasilan</span><div class="value">Rp {pending_penghasilan:,.0f}</div><div class="sub">Omzet setelah biaya</div></div>
                     <div class="section-metric-card metric-orange"><span class="label">Estimasi HPP</span><div class="value">Rp {pending_hpp:,.0f}</div><div class="sub">Modal produk pending</div></div>
                     <div class="section-metric-card {pending_laba_class}"><span class="label">Proyeksi Laba Bersih</span><div class="value">Rp {pending_laba:,.0f}</div><div class="sub">Penghasilan - HPP</div></div>
