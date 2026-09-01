@@ -1075,6 +1075,10 @@ with st.sidebar:
     hpp_active = " active" if menu == "hpp" else ""
     stock_active = " active" if menu == "stock" else ""
     st.markdown(
+        f'<a class="sidebar-nav-link{stock_active}" href="?page=stock&{session_query}" target="_self">📦 Valuasi Stok</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
         f'<a class="sidebar-nav-link{dashboard_active}" href="?{session_query}" target="_self">🏠 Dashboard</a>',
         unsafe_allow_html=True,
     )
@@ -1088,11 +1092,6 @@ with st.sidebar:
     )
     st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
     st.divider()
-
-    st.markdown(
-        f'<a class="sidebar-nav-link{stock_active}" href="?page=stock&{session_query}" target="_self">Valuasi Stok</a>',
-        unsafe_allow_html=True,
-    )
 
     if menu == "dashboard":
         st.markdown("⚙️ **Dashboard Setting**")
@@ -2644,13 +2643,42 @@ elif menu == "stock":
                     },
                 )
                 if {"Stok", "HPP / Unit"}.issubset(edited_stock.columns):
-                    edited_stock["Nilai Stok"] = edited_stock["Stok"] * edited_stock["HPP / Unit"]
-                    edited_stock["Status HPP"] = edited_stock["HPP / Unit"].map(lambda v: "Valid" if v > 0 else "Missing")
-                    edited_valid = edited_stock["Status HPP"].eq("Valid")
-                    st.info(
-                        f"Valuasi setelah edit: **Rp {edited_stock.loc[edited_valid, 'Nilai Stok'].sum():,.0f}** "
-                        f"dari {edited_valid.sum():,} variasi dengan HPP valid."
-                    )
+                    try:
+                        edited_stock["Stok"] = pd.to_numeric(edited_stock["Stok"], errors="coerce").fillna(0)
+                        edited_stock["HPP / Unit"] = pd.to_numeric(edited_stock["HPP / Unit"], errors="coerce").fillna(0)
+                        edited_stock["Nilai Stok"] = edited_stock["Stok"] * edited_stock["HPP / Unit"]
+                        edited_stock["Status HPP"] = edited_stock["HPP / Unit"].map(lambda v: "Valid" if v > 0 else "Missing")
+                        edited_valid = edited_stock["Status HPP"].eq("Valid")
+                        recalculate_clicked = st.button("🔄 Proses Ulang Valuasi", type="primary", key="recalculate_stock_valuation")
+                        if recalculate_clicked:
+                            st.session_state.stock_valuation_total_edited = float(edited_stock.loc[edited_valid, "Nilai Stok"].sum())
+                            st.session_state.stock_valuation_valid_edited = int(edited_valid.sum())
+                            st.session_state.stock_valuation_units_edited = float(edited_stock["Stok"].sum())
+                            st.session_state.stock_valuation_coverage_edited = float(edited_valid.mean() * 100)
+                            st.session_state.stock_valuation_debug = f"Klik diterima; {len(edited_stock):,} baris dihitung."
+                        if "stock_valuation_total_edited" in st.session_state:
+                            st.success("Valuasi berhasil diproses ulang dari data yang sudah diedit.")
+                            st.caption("Tabel berikut menampilkan Nilai Stok terbaru setelah proses ulang.")
+                            st.dataframe(
+                                edited_stock[show],
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "HPP / Unit": st.column_config.NumberColumn("HPP / Unit", format="Rp %,.0f"),
+                                    "Nilai Stok": st.column_config.NumberColumn("Nilai Stok", format="Rp %,.0f"),
+                                },
+                            )
+                            st.subheader("Hasil Proses Ulang")
+                            recalculated_cols = st.columns(4)
+                            recalculated_cols[0].metric("Total Unit Stok", f"{st.session_state.stock_valuation_units_edited:,.0f}")
+                            recalculated_cols[1].metric("Nilai Stok (HPP Valid)", f"Rp {st.session_state.stock_valuation_total_edited:,.0f}")
+                            recalculated_cols[2].metric("Variasi HPP Valid", f"{st.session_state.stock_valuation_valid_edited:,}")
+                            recalculated_cols[3].metric("HPP Coverage", f"{st.session_state.stock_valuation_coverage_edited:.1f}%")
+                        if "stock_valuation_debug" in st.session_state:
+                            st.caption(st.session_state.stock_valuation_debug)
+                    except Exception as exc:
+                        st.error("Gagal menghitung ulang valuasi stok:")
+                        st.exception(exc)
         except Exception as exc:
             st.error("File stok tidak dapat dibaca. Detail error:")
             st.exception(exc)
