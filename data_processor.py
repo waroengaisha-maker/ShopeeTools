@@ -308,6 +308,8 @@ def generate_product_summary(df, hpp_lookup=None):
     # HANYA masukkan pesanan yang SUDAH settlement (Is_Settled == True)
     if 'Is_Settled' in clean_df.columns:
         clean_df = clean_df[clean_df['Is_Settled'] == True].copy()
+    if 'Is_Cancelled' in clean_df.columns:
+        clean_df = clean_df[clean_df['Is_Cancelled'] != True].copy()
 
     if clean_df.empty:
         return pd.DataFrame()
@@ -426,6 +428,25 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Income SKU dengan identitas transaksi lengkap adalah bukti settlement,
     # termasuk saat Total Penghasilan bernilai Rp0.
     df_income = filter_valid_income_sku_rows(df_income)
+    # Shopee dapat mempertahankan status order induk sebagai Selesai walaupun
+    # salah satu SKU dibatalkan. Baris Income Rp0 menjadi sinyal pembatalan;
+    # keputusan final juga mensyaratkan baris Order tidak memiliki No. Resi.
+    income_amount_col = next(
+        (col for col in ['Total Penghasilan', 'Jumlah Pelepasan Dana', 'Penghasilan'] if col in df_income.columns),
+        None,
+    )
+    if income_amount_col is not None and 'Harga Produk' in df_income.columns:
+        income_amount = pd.to_numeric(df_income[income_amount_col], errors='coerce').fillna(0)
+        product_amount = pd.to_numeric(df_income['Harga Produk'], errors='coerce').fillna(0)
+        df_income['Income_Cancelled'] = income_amount.eq(0) & product_amount.gt(0)
+    else:
+        df_income['Income_Cancelled'] = False
+    cancelled_order_products = set(
+        zip(
+            df_income.loc[df_income['Income_Cancelled'], 'No. Pesanan'].astype(str).str.strip(),
+            df_income.loc[df_income['Income_Cancelled'], 'Nama Produk'].astype(str).str.strip(),
+        )
+    )
     
     # Pastikan Returned quantity terisi numerik (tanpa mengurangi Jumlah gross)
     df_order['Returned quantity'] = df_order['Returned quantity'].fillna(0).astype(int)
@@ -514,12 +535,24 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Marker eksplisit membedakan Income Rp0 yang benar-benar match dari Income
     # yang tidak ada sama sekali. Jangan infer settlement dari kolom biaya.
     df_income['Income_Matched'] = True
-    cols_to_merge = keys + fee_columns + ['Income_Matched']
+    cols_to_merge = keys + fee_columns + ['Income_Matched', 'Income_Cancelled']
     df_merged = pd.merge(df_order, df_income[cols_to_merge], on=keys, how='left')
 
     # Penggabungan Nama Produk dan Nama Variasi untuk laporan final (setelah join sukses)
     df_merged['Nama Produk'] = df_merged['Nama Produk'].fillna('')
     df_merged['Nama Variasi'] = df_merged['Nama Variasi'].fillna('')
+    # Baris tanpa No. Resi tidak boleh dianggap settled per item. Pada file
+    # Shopee, item seperti ini dapat berada dalam order induk Selesai tetapi
+    # sebenarnya dibatalkan (contoh varian Rawon pada order multi-item).
+    merged_order_product = list(zip(
+        df_merged['No. Pesanan'].astype(str).str.strip(),
+        df_merged['Nama Produk Asli'].astype(str).str.strip(),
+    ))
+    pair_cancelled = pd.Series(merged_order_product, index=df_merged.index).isin(cancelled_order_products)
+    # Pada file Order, No. Resi melekat pada baris SKU. Karena file Income
+    # tidak membawa Nama Variasi, gunakan No. Resi sebagai sumber kebenaran
+    # item-level: baris tanpa resi bukan item settled dan masuk audit batal.
+    df_merged['Is_Cancelled_Line'] = df_merged['No. Resi'].isna()
     df_merged['Nama Produk Tampilan'] = df_merged.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
 
     # Agregasi per Nama Produk Tampilan DAN No. Pesanan
@@ -543,6 +576,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         'Total Biaya': sum_or_nan,
         'Pajak': sum_or_nan,
         'Income_Matched': any_income_matched
+        , 'Is_Cancelled_Line': any_income_matched
     }
     
     result = df_merged.groupby(['Nama Produk Tampilan', 'No. Pesanan']).agg(agg_dict).reset_index()
@@ -571,7 +605,13 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
 
     # Tandai settlement berdasarkan bukti row Income yang berhasil match per item.
     # Total Penghasilan = Rp0 tetap settlement; tidak ada Income match = pending.
-    result['Is_Settled'] = result['Income_Matched'].astype(bool)
+    # Item batal tidak boleh masuk Settled/HPP/laba walaupun order induknya
+    # berstatus Selesai dan memiliki item lain yang berhasil dikirim.
+    result['Is_Cancelled'] = result['Is_Cancelled_Line'].astype(bool)
+    result['Is_Settled'] = (
+        result['Income_Matched'].astype(bool)
+        & ~result['Is_Cancelled']
+    )
 
     # Kolom kuantitas dan uang kotor selalu integer
     gross_numeric_cols = ['Harga (@)', 'Jumlah', 'Returned quantity', 'Jumlah Bersih', 'Subtotal']
@@ -601,6 +641,7 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         'No. Pesanan',
         'Nama Produk',
         'Is_Settled',
+        'Is_Cancelled',
         'Jumlah Bersih',
         'Harga (@)',
         'Jumlah',

@@ -448,7 +448,7 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
 def _compute_dashboard_kpis(result_df, hpp_lookup_map):
     df = result_df.copy()
     settled = df[df['Is_Settled'] == True].copy() if 'Is_Settled' in df.columns else df.copy()
-    unsettled = df[df['Is_Settled'] == False].copy() if 'Is_Settled' in df.columns else pd.DataFrame()
+    unsettled = df[(df['Is_Settled'] == False) & (~df.get('Is_Cancelled', False))].copy() if 'Is_Settled' in df.columns else pd.DataFrame()
 
     total_subtotal = int(settled['Subtotal'].sum()) if 'Subtotal' in settled.columns else 0
     total_biaya = int(settled['Total Biaya'].sum()) if 'Total Biaya' in settled.columns else 0
@@ -1552,7 +1552,8 @@ if menu == "dashboard":
             overview_section = overview_slot.container(border=True)
             total_order_count = order_audit['No. Pesanan'].nunique() if not order_audit.empty else 0
             settled_order_count = result.loc[result['Is_Settled'] == True, 'No. Pesanan'].nunique() if 'Is_Settled' in result.columns else 0
-            pending_order_count = result.loc[result['Is_Settled'] == False, 'No. Pesanan'].nunique() if 'Is_Settled' in result.columns else 0
+            pending_mask = (result['Is_Settled'] == False) & (~result.get('Is_Cancelled', False)) if 'Is_Settled' in result.columns else pd.Series(False, index=result.index)
+            pending_order_count = result.loc[pending_mask, 'No. Pesanan'].nunique() if 'No. Pesanan' in result.columns else 0
             seller_cancel_rate = (
                 cancelled_summary['seller_count'] / total_order_count * 100
                 if total_order_count > 0 else 0
@@ -2146,7 +2147,7 @@ elif menu in {"reconciliation", "order"}:
                 """
                 s = {}
                 settled = df_slice[df_slice['Is_Settled'] == True].copy() if 'Is_Settled' in df_slice.columns else df_slice.copy()
-                unsettled = df_slice[df_slice['Is_Settled'] == False].copy() if 'Is_Settled' in df_slice.columns else pd.DataFrame()
+                unsettled = df_slice[(df_slice['Is_Settled'] == False) & (~df_slice.get('Is_Cancelled', False))].copy() if 'Is_Settled' in df_slice.columns else pd.DataFrame()
                 fee_history = history_df if history_df is not None else df_slice
                 history_settled = (
                     fee_history[fee_history['Is_Settled'] == True].copy()
