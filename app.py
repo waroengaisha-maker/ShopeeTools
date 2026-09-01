@@ -1185,10 +1185,10 @@ if menu == "dashboard":
         overview_slot = st.empty()
         settled_slot = st.empty()
         projection_slot = st.empty()
+        anomaly_slot = st.empty()
         top_products_slot = st.empty()
         profitability_slot = st.empty()
         hpp_health_slot = st.empty()
-        anomaly_slot = st.empty()
 
         # Kesehatan mapping HPP agar angka laba selalu memiliki konteks cakupan biaya.
         hpp_health_section = hpp_health_slot.container(border=True)
@@ -1430,19 +1430,15 @@ if menu == "dashboard":
                     <div class="section-metric-card metric-green"><span class="label">Net Sales</span><div class="value">Rp {net_sales_shopee:,.0f}</div><div class="sub">Pesanan Settled + Pending</div></div>
                     <div class="section-metric-card metric-blue"><span class="label">Pesanan Settled</span><div class="value">Rp {total_omzet:,.0f}</div><div class="sub">Masuk penghasilan aktual</div></div>
                     <div class="section-metric-card metric-orange"><span class="label">Pesanan Pending</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">Masih menunggu settlement</div></div>
-                    <div class="section-metric-card metric-orange"><span class="label">Nilai Pesanan Batal</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Ditambahkan ke Gross Sales</div></div>
                     <div class="section-metric-card metric-amber"><span class="label">Valid Tanpa No. Resi</span><div class="value">Rp {no_resi_value:,.0f}</div><div class="sub">{no_resi_count:,} pesanan; termasuk Pending</div></div>
-                    <div class="section-metric-card metric-red"><span class="label">Pesanan Dibatalkan</span><div class="value">{cancelled_summary['count']:,}</div><div class="sub">Order berstatus batal</div></div>
-                    <div class="section-metric-card metric-red"><span class="label">Dibatalkan oleh Toko</span><div class="value">{cancelled_summary['seller_count']:,}</div><div class="sub">{seller_cancel_rate:.2f}% dari seluruh order · Rp {cancelled_summary['seller_value']:,.0f}</div></div>
-                    <div class="section-metric-card metric-amber"><span class="label">Tingkat Pembatalan Global</span><div class="value">{cancelled_summary['rate']:.2f}%</div><div class="sub">Seluruh pesanan batal ÷ seluruh order</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Total Nilai Pembatalan</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Nilai bruto pesanan batal</div></div>
                     <div class="section-metric-card metric-blue"><span class="label">Total Pesanan</span><div class="value">{total_order_count:,}</div><div class="sub">Semua status pesanan</div></div>
-                    <div class="section-metric-card metric-red"><span class="label">Tidak Terselesaikan (Minggu Berjalan)</span><div class="value">{unresolved_7d_rate:.2f}%</div><div class="sub">Senin-Minggu · {unresolved_7d_count:,} order · Toko {seller_cancel_7d_count:,} · Return {buyer_return_7d_count:,}</div></div>
                 </div>''',
                 unsafe_allow_html=True,
             )
-            overview_section.caption("Gross Sales mengikuti total Overview Shopee. Net Sales dan Laba Bersih tidak memasukkan pesanan batal.")
+            overview_section.caption("Gross Sales adalah total subtotal pesanan; Net Sales adalah Settled + Pending.")
             anomaly_section = anomaly_slot.container(border=True)
-            anomaly_section.markdown('<div class="section-parent-card section-order-anomaly"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
+            anomaly_section.markdown('<div class="section-parent-card section-order-anomaly"><div class="title">Pesanan Batal / Tidak Terselesaikan</div><div class="description">Seluruh informasi pembatalan, return, risiko penalti, dan estimasi dampak finansial.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
                 st.warning(
                     f"Terdapat {cancelled_summary['count']:,} pesanan dibatalkan "
@@ -1455,6 +1451,11 @@ if menu == "dashboard":
             anomaly_section.markdown(
                 f"""
                 <div class="section-card-grid risk-card-grid">
+                    <div class="section-metric-card metric-red"><span class="label">Pesanan Dibatalkan</span><div class="value">{cancelled_summary['count']:,}</div><div class="sub">Order berstatus batal</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Nilai Pesanan Batal</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Termasuk dalam Gross Sales</div></div>
+                    <div class="section-metric-card metric-amber"><span class="label">Tingkat Pembatalan Global</span><div class="value">{cancelled_summary['rate']:.2f}%</div><div class="sub">Seluruh pesanan batal ÷ seluruh order</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Dibatalkan oleh Toko</span><div class="value">{cancelled_summary['seller_count']:,}</div><div class="sub">{seller_cancel_rate:.2f}% dari seluruh order · Rp {cancelled_summary['seller_value']:,.0f}</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Tidak Terselesaikan (Minggu Berjalan)</span><div class="value">{unresolved_7d_rate:.2f}%</div><div class="sub">Senin-Minggu · {unresolved_7d_count:,} order · Toko {seller_cancel_7d_count:,} · Return {buyer_return_7d_count:,}</div></div>
                     <div class="section-metric-card metric-blue">
                         <span class="label">Estimasi Penghasilan Hilang</span>
                         <div class="value">Rp {cancelled_summary['income_lost']:,.0f}</div>
