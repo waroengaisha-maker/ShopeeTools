@@ -26,6 +26,12 @@ from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
 
+if st.query_params.get("reset") == "1":
+    st.session_state.clear()
+    st.query_params.clear()
+    st.query_params["session"] = uuid.uuid4().hex
+    st.rerun()
+
 
 def _read_shopee_stock_excel(uploaded_file):
     """Baca ekspor stok Shopee, termasuk workbook dengan activePane invalid."""
@@ -44,6 +50,35 @@ def _read_shopee_stock_excel(uploaded_file):
                 target.writestr(item, data)
         repaired.seek(0)
         return pd.read_excel(repaired, sheet_name=0, header=2)
+
+
+def _validate_report_upload(uploaded_file, report_type):
+    """Validasi ringan file Order/Income sebelum proses rekonsiliasi."""
+    if uploaded_file is None:
+        return False, "File belum dipilih."
+    try:
+        uploaded_file.seek(0)
+        excel = pd.ExcelFile(uploaded_file)
+        expected_sheet = "orders" if report_type == "order" else "Penghasilan"
+        if expected_sheet not in excel.sheet_names:
+            return False, f"Sheet '{expected_sheet}' tidak ditemukan. Sheet tersedia: {', '.join(excel.sheet_names)}."
+        header = 0 if report_type == "order" else 2
+        columns = set(pd.read_excel(uploaded_file, sheet_name=expected_sheet, header=header, nrows=0).columns)
+        required = (
+            {"No. Pesanan", "Status Pesanan", "Waktu Pesanan Dibuat", "Nama Produk", "Jumlah", "Harga Setelah Diskon"}
+            if report_type == "order" else {"No. Pesanan", "Nama Produk", "Harga Produk"}
+        )
+        missing = sorted(required - columns)
+        if missing:
+            return False, f"Kolom wajib tidak ditemukan: {', '.join(missing)}."
+        return True, "File valid."
+    except Exception as exc:
+        return False, f"File tidak dapat dibaca: {exc}"
+    finally:
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
 
 # Setiap browser session memiliki ruang upload sendiri. Token ikut disimpan di
 # URL agar unggahan tetap dapat ditemukan setelah halaman dimuat ulang atau
@@ -1064,13 +1099,13 @@ html, body, [class*="css"] {
 
 # ─── Sidebar Navigation ───
 menu = st.query_params.get("page", "dashboard")
-if menu not in {"dashboard", "reconciliation", "hpp", "stock"}:
+if menu not in {"dashboard", "reconciliation", "hpp", "stock", "settings"}:
     menu = "dashboard"
 session_query = f"session={st.session_state.session_id}"
 
 with st.sidebar:
     st.markdown(
-        f'<h2><a class="sidebar-brand-link" href="?{session_query}" target="_self">🏪 Warung Aisha Tool</a></h2>',
+        f'<h2><a class="sidebar-brand-link" href="?reset=1" target="_self" title="Mulai sesi baru">🏪 Warung Aisha Tool</a></h2>',
         unsafe_allow_html=True,
     )
     st.caption("Alat Analisis & Manajemen Penjualan Shopee")
@@ -1081,10 +1116,7 @@ with st.sidebar:
     reconciliation_active = " active" if menu == "reconciliation" else ""
     hpp_active = " active" if menu == "hpp" else ""
     stock_active = " active" if menu == "stock" else ""
-    st.markdown(
-        f'<a class="sidebar-nav-link{stock_active}" href="?page=stock&{session_query}" target="_self">📦 Valuasi Stok</a>',
-        unsafe_allow_html=True,
-    )
+    settings_active = " active" if menu == "settings" else ""
     st.markdown(
         f'<a class="sidebar-nav-link{dashboard_active}" href="?{session_query}" target="_self">🏠 Dashboard</a>',
         unsafe_allow_html=True,
@@ -1094,13 +1126,21 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown(
+        f'<a class="sidebar-nav-link{stock_active}" href="?page=stock&{session_query}" target="_self">📦 Valuasi Stok</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
         f'<a class="sidebar-nav-link{hpp_active}" href="?page=hpp&{session_query}" target="_self">📦 Kelola Master HPP</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<a class="sidebar-nav-link{settings_active}" href="?page=settings&{session_query}" target="_self">⚙️ Setting</a>',
         unsafe_allow_html=True,
     )
     st.caption("Gunakan Ctrl/Cmd+klik atau klik kanan → buka di tab baru.")
     st.divider()
 
-    if menu == "dashboard":
+    if False:
         st.markdown("⚙️ **Dashboard Setting**")
         if 'laba_warn_threshold' not in st.session_state:
             st.session_state.laba_warn_threshold = 10000
@@ -1123,10 +1163,41 @@ with st.sidebar:
 if menu == "dashboard":
     st.title("Dashboard Penjualan")
     if 'result' not in st.session_state:
-        if _load_session_result():
+        st.subheader("Mulai dari sini")
+        st.caption("Unggah laporan Order dan Penghasilan Shopee, lalu proses untuk mengisi dashboard.")
+        dashboard_order = st.file_uploader("Laporan Order Shopee (.xlsx)", type=["xlsx"], key="order_uploader")
+        dashboard_income = st.file_uploader("Laporan Penghasilan Shopee (.xlsx)", type=["xlsx"], key="income_uploader")
+        if dashboard_order is not None:
+            st.session_state.uploaded_order_bytes = persist_session_order_upload(dashboard_order)
+            st.session_state.uploaded_order_name = dashboard_order.name
+        if dashboard_order is not None and dashboard_income is not None:
+            order_valid, order_message = _validate_report_upload(dashboard_order, "order")
+            income_valid, income_message = _validate_report_upload(dashboard_income, "income")
+            if not order_valid:
+                st.error(f"Laporan Order tidak valid: {order_message}")
+            if not income_valid:
+                st.error(f"Laporan Penghasilan tidak valid: {income_message}")
+            dashboard_start, dashboard_end = get_order_date_bounds(dashboard_order) if order_valid else (None, None)
+            if order_valid and income_valid and st.button("🚀 Proses Rekonsiliasi & Tampilkan Dashboard", type="primary", use_container_width=True):
+                dashboard_order.seek(0)
+                dashboard_income.seek(0)
+                try:
+                    with st.spinner("Memproses data transaksi..."):
+                        st.session_state.result = process_reconciliation(dashboard_order, dashboard_income, start_date=dashboard_start, end_date=dashboard_end)
+                        dashboard_income.seek(0)
+                        st.session_state.df_adjustments = extract_adjustments(dashboard_income)
+                        st.session_state.processed_start_date = dashboard_start
+                        st.session_state.processed_end_date = dashboard_end
+                        st.session_state.processed_at = datetime.now(ZoneInfo("Asia/Jakarta"))
+                        _save_session_result()
+                    st.rerun()
+                except Exception as exc:
+                    st.error("Rekonsiliasi gagal dijalankan. Periksa kembali jenis dan isi file.")
+                    st.exception(exc)
+        elif _load_session_result():
             st.rerun()
         else:
-            st.info("Jalankan proses rekonsiliasi di menu Rekonsiliasi Shopee agar dashboard ini menampilkan data.")
+            st.info("Unggah kedua file untuk memulai dashboard.")
     else:
         result = st.session_state.result
         proc_start = st.session_state.get('processed_start_date')
@@ -2639,6 +2710,19 @@ elif menu == "reconciliation":
 # ==============================================================================
 # 📦 MENU 3: KELOLA MASTER HPP
 # ==============================================================================
+elif menu == "settings":
+    st.title("⚙️ Setting")
+    st.write("Atur preferensi tampilan dan ambang batas analisis dashboard.")
+    if 'laba_warn_threshold' not in st.session_state:
+        st.session_state.laba_warn_threshold = 10000
+    st.session_state.laba_warn_threshold = st.number_input(
+        "Threshold laba kuning", min_value=0, max_value=1000000,
+        value=int(st.session_state.laba_warn_threshold), step=1000,
+        key="laba_warn_threshold_settings",
+        help="Nilai laba bersih sampai batas ini diberi warna kuning; di atasnya hijau.",
+    )
+    st.caption("Pengaturan ini digunakan pada tampilan kolom Laba Bersih di detail transaksi.")
+
 elif menu == "stock":
     st.title("Valuasi Nilai Stok")
     st.write("Upload file Mass Update Sales Info Shopee untuk menghitung nilai stok berdasarkan HPP.")
