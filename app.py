@@ -1421,23 +1421,6 @@ if menu == "dashboard":
                 lambda row: row['Laba'] / row['Omzet'] * 100 if row['Omzet'] > 0 else 0, axis=1
             )
 
-            profitability_section = profitability_slot.container(border=True)
-            profitability_section.markdown(
-                '<div class="section-parent-card section-order-profit"><div class="title">Produk Paling Menguntungkan</div>'
-                '<div class="description">Fokus pada margin laba untuk membantu menentukan produk yang perlu dipertahankan atau dievaluasi.</div></div>',
-                unsafe_allow_html=True,
-            )
-            champion_col, lowest_col = profitability_section.columns(2)
-            champion = top_products.nlargest(5, 'Margin')[['Nama Produk', 'Margin']].copy()
-            lowest = top_products.nsmallest(5, 'Margin')[['Nama Produk', 'Margin']].copy()
-            for profit_frame in [champion, lowest]:
-                profit_frame['Margin'] = profit_frame['Margin'].map(lambda value: f"{value:,.1f}%")
-                profit_frame.rename(columns={'Nama Produk': 'Produk'}, inplace=True)
-            champion_col.markdown('#### 💎 Profit Champion')
-            champion_col.dataframe(champion, use_container_width=True, hide_index=True)
-            lowest_col.markdown('#### 🚨 Margin Terendah')
-            lowest_col.dataframe(lowest, use_container_width=True, hide_index=True)
-
             sort_column = {'Omzet': 'Omzet', 'Qty': 'Qty', 'Laba': 'Laba', 'Margin': 'Margin'}[ranking_metric]
             top_products = top_products.sort_values(sort_column, ascending=False).head(10).reset_index(drop=True)
             total_top_profit = top_products['Laba'].sum()
@@ -1461,7 +1444,7 @@ if menu == "dashboard":
                 use_container_width=True,
                 hide_index=True,
             )
-            top_products_section.caption(f"Total laba bersih seluruh produk settled: Rp {total_top_profit:,.0f}")
+            top_products_section.caption(f"Total laba bersih Top 10 produk: Rp {total_top_profit:,.0f}")
         else:
             top_products_section.info('Belum ada data produk settled untuk dibuat ranking.')
 
