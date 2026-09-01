@@ -107,29 +107,6 @@ def get_suggestion_with_confidence(shopee_name, df_hpp):
 
 
 def auto_suggest_mapping(shopee_product_names, df_hpp):
-    """Menghasilkan mapping dengan filter confidence ketat:
-    - Confidence >= 0.90 (90%): Auto-mapped & disimpan permanen.
-    - Confidence 0.70 - 0.89 (70-89%): Disarankan di memori / butuh konfirmasi user (TIDAK auto-save).
-    - Confidence < 0.70 (<70%): Dibiarkan kosong / Unmapped.
-    """
+    """Legacy compatibility: never mutates or saves the confirmed mapping."""
     existing_mapping = load_mapping()
-    updated = False
-    
-    if df_hpp.empty:
-        return existing_mapping
-
-    for s_name in shopee_product_names:
-        # Entri kosong dari pemetaan manual versi lama tetap boleh menerima
-        # saran otomatis; hanya pemetaan yang benar-benar sudah memiliki kunci
-        # HPP yang dipertahankan.
-        if not existing_mapping.get(s_name):
-            best_key, score, _ = get_suggestion_with_confidence(s_name, df_hpp)
-            # Hanya simpan permanen jika tingkat keyakinan >= 90%
-            if score >= 0.90 and best_key:
-                existing_mapping[s_name] = best_key
-                updated = True
-
-    if updated:
-        save_mapping(existing_mapping)
-
     return existing_mapping

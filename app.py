@@ -3053,17 +3053,8 @@ elif menu == "hpp":
         if not all_prods_list:
             st.info("💡 Belum ada produk Shopee yang tercatat. Unggah file Order untuk mengambil daftar produk.")
         else:
-            # Pemetaan dengan kecocokan sangat tinggi (>=90%) disimpan otomatis.
-            # Produk lain tetap menunggu peninjauan agar angka HPP tidak keliru.
-            mapping_before_auto = dict(mapping_dict)
-            mapping_dict = auto_suggest_mapping(all_prods_list, df_hpp_master)
-            auto_mapped_count = sum(
-                1
-                for product in all_prods_list
-                if not mapping_before_auto.get(product) and mapping_dict.get(product)
-            )
-            if auto_mapped_count:
-                st.success(f"✅ {auto_mapped_count} produk dipetakan otomatis dengan kecocokan tinggi.")
+            # Auto-suggestion tidak pernah menjadi mapping aktif. Mapping hanya
+            # berubah melalui pilihan user dan tombol simpan di bawah.
 
             BELUM_DIPETAKAN = "(Belum Dipetakan)"
             hpp_options_list = [BELUM_DIPETAKAN] + [
