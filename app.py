@@ -1962,42 +1962,7 @@ if menu == "dashboard":
                                     },
                                 )
 
-        filter_options = _build_dashboard_filter_options(result)
-        filter_labels = {
-            "Periode": "Periode",
-            "Produk": "Produk",
-            "SKU": "SKU",
-            "Status Settlement": "Status Settlement",
-            "Status Retur": "Status Retur",
-        }
-
-        st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
-        st.subheader("Filter")
-        c1, c2, c3 = st.columns(3)
-        c4, c5 = st.columns(2)
-
-        with c1:
-            periode_vals = st.multiselect(filter_labels["Periode"], filter_options.get("Periode", []), key="dash_filter_periode")
-        with c2:
-            produk_vals = st.multiselect(filter_labels["Produk"], filter_options.get("Produk", []), key="dash_filter_produk")
-        with c3:
-            sku_vals = st.multiselect(filter_labels["SKU"], filter_options.get("SKU", []), key="dash_filter_sku")
-        with c4:
-            settlement_vals = st.multiselect(filter_labels["Status Settlement"], filter_options.get("Status Settlement", []), key="dash_filter_settlement")
-        with c5:
-            retur_vals = st.multiselect(filter_labels["Status Retur"], filter_options.get("Status Retur", []), key="dash_filter_retur")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        dashboard_filtered = _apply_dashboard_filters(result, periode_vals, produk_vals, sku_vals, settlement_vals, retur_vals)
-
-        display_df = dashboard_filtered.copy()
-        if 'No.' in display_df.columns:
-            display_df = display_df.drop(columns=['No.'])
-        display_df.insert(0, 'No.', range(1, len(display_df) + 1))
-
-        with st.container(border=True):
-            st.caption(f"Menampilkan {len(dashboard_filtered)} baris dari {len(result)} baris data.")
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        # Detail transaksi tersedia di menu Order agar Dashboard tetap ringkas.
 
 
 # ==============================================================================
