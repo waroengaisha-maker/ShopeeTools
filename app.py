@@ -1404,7 +1404,8 @@ if menu == "dashboard":
             zero_series = pd.Series(0, index=top_settled.index)
             top_settled['_qty'] = pd.to_numeric(top_settled.get('Jumlah Bersih', zero_series), errors='coerce').fillna(0)
             top_settled['_omzet'] = pd.to_numeric(top_settled.get('Subtotal', zero_series), errors='coerce').fillna(0)
-            top_settled['_income'] = top_settled['_omzet'] + pd.to_numeric(top_settled.get('Total Biaya', zero_series), errors='coerce').fillna(0)
+            top_settled['_biaya'] = pd.to_numeric(top_settled.get('Total Biaya', zero_series), errors='coerce').fillna(0)
+            top_settled['_income'] = top_settled['_omzet'] + top_settled['_biaya']
             top_settled['_hpp'] = top_settled.apply(
                 lambda row: row['_qty'] * (
                     hpp_lookup.get(row['Nama Produk'], {}).get('HargaPokok', 0)
@@ -1413,7 +1414,7 @@ if menu == "dashboard":
             )
             top_products = top_settled.groupby('Nama Produk', dropna=False).agg(
                 Qty=('_qty', 'sum'), Omzet=('_omzet', 'sum'),
-                _income=('_income', 'sum'), _hpp=('_hpp', 'sum'),
+                _biaya=('_biaya', 'sum'), _income=('_income', 'sum'), _hpp=('_hpp', 'sum'),
             ).reset_index()
             top_products['Laba'] = top_products['_income'] - top_products['_hpp']
             top_products['Margin'] = top_products.apply(
@@ -1440,15 +1441,22 @@ if menu == "dashboard":
             sort_column = {'Omzet': 'Omzet', 'Qty': 'Qty', 'Laba': 'Laba', 'Margin': 'Margin'}[ranking_metric]
             top_products = top_products.sort_values(sort_column, ascending=False).head(10).reset_index(drop=True)
             top_products.insert(0, '#', range(1, len(top_products) + 1))
-            top_products = top_products.rename(columns={'Nama Produk': 'Produk'})
+            top_products = top_products.rename(columns={
+                'Nama Produk': 'Produk',
+                'Omzet': 'Omzet Kotor',
+                '_biaya': 'Total Biaya',
+                '_income': 'Penghasilan',
+                '_hpp': 'HPP',
+                'Laba': 'Laba Bersih (Setelah HPP)',
+            })
             top_products['Qty'] = top_products['Qty'].map(lambda value: f"{value:,.0f}")
-            for amount_column in ['Omzet', 'Laba']:
+            for amount_column in ['Omzet Kotor', 'Total Biaya', 'Penghasilan', 'HPP', 'Laba Bersih (Setelah HPP)']:
                 top_products[amount_column] = top_products[amount_column].map(
                     lambda value: f"Rp {value:,.0f}"
                 )
             top_products['Margin'] = top_products['Margin'].map(lambda value: f"{value:,.1f}%")
             top_products_section.dataframe(
-                top_products[['#', 'Produk', 'Qty', 'Omzet', 'Laba', 'Margin']],
+                top_products[['#', 'Produk', 'Qty', 'Omzet Kotor', 'Total Biaya', 'Penghasilan', 'HPP', 'Laba Bersih (Setelah HPP)', 'Margin']],
                 use_container_width=True,
                 hide_index=True,
             )
