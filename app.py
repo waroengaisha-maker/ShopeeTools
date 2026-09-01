@@ -243,6 +243,10 @@ def _save_session_result():
         "processed_start_date": st.session_state.get("processed_start_date"),
         "processed_end_date": st.session_state.get("processed_end_date"),
         "processed_at": st.session_state.get("processed_at"),
+        "uploaded_order_bytes": st.session_state.get("uploaded_order_bytes"),
+        "uploaded_income_bytes": st.session_state.get("uploaded_income_bytes"),
+        "uploaded_order_name": st.session_state.get("uploaded_order_name"),
+        "uploaded_income_name": st.session_state.get("uploaded_income_name"),
     }
     result_path = _get_session_result_path()
     try:
@@ -1110,7 +1114,7 @@ html, body, [class*="css"] {
 
 # ─── Sidebar Navigation ───
 menu = st.query_params.get("page", "dashboard")
-if menu not in {"dashboard", "reconciliation", "hpp", "stock", "settings"}:
+if menu not in {"dashboard", "order", "reconciliation", "hpp", "stock", "settings"}:
     menu = "dashboard"
 session_query = f"session={st.session_state.session_id}"
 
@@ -1124,7 +1128,7 @@ with st.sidebar:
 
     st.markdown("📌 **Navigasi**")
     dashboard_active = " active" if menu == "dashboard" else ""
-    reconciliation_active = " active" if menu == "reconciliation" else ""
+    reconciliation_active = " active" if menu in {"reconciliation", "order"} else ""
     hpp_active = " active" if menu == "hpp" else ""
     stock_active = " active" if menu == "stock" else ""
     settings_active = " active" if menu == "settings" else ""
@@ -1133,7 +1137,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=reconciliation&{session_query}" target="_self">📊 Rekonsiliasi Shopee</a>',
+        f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=order&{session_query}" target="_self">📋 Order</a>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -1215,7 +1219,13 @@ if menu == "dashboard":
                     progress = st.progress(0, text="Menyiapkan proses rekonsiliasi...")
                     with st.spinner("Memproses data transaksi..."):
                         progress.progress(25, text="Membaca file Order dan Income...")
-                        st.session_state.result = _cached_reconciliation(dashboard_order.getvalue(), dashboard_income.getvalue(), dashboard_start, dashboard_end)
+                        order_bytes = dashboard_order.getvalue()
+                        income_bytes = dashboard_income.getvalue()
+                        st.session_state.uploaded_order_bytes = persist_session_order_upload(dashboard_order)
+                        st.session_state.uploaded_order_name = dashboard_order.name
+                        st.session_state.uploaded_income_bytes = income_bytes
+                        st.session_state.uploaded_income_name = dashboard_income.name
+                        st.session_state.result = _cached_reconciliation(order_bytes, income_bytes, dashboard_start, dashboard_end)
                         progress.progress(75, text="Menghitung ringkasan dan biaya...")
                         dashboard_income.seek(0)
                         st.session_state.df_adjustments = extract_adjustments(dashboard_income)
@@ -1978,14 +1988,18 @@ if menu == "dashboard":
 # ==============================================================================
 # 📊 MENU 2: REKONSILIASI SHOPEE
 # ==============================================================================
-elif menu == "reconciliation":
-    st.title("📊 Rekonsiliasi Transaksi & Margin Shopee")
-    st.write("Upload laporan Order dan Laporan Penghasilan Shopee untuk melihat analisis keuangan, fee, dan margin laba.")
+elif menu in {"reconciliation", "order"}:
+    if 'result' not in st.session_state:
+        _load_session_result()
+    st.title("📋 Order")
+    st.write("Detail transaksi berdasarkan file Order dan Income yang aktif dari Dashboard.")
 
     with st.sidebar:
         st.subheader("📁 Upload File Transaksi")
-        uploaded_order = st.file_uploader("1. Laporan Order (Excel) *", type=['xlsx'], key="order_uploader")
-        uploaded_income = st.file_uploader("2. Laporan Penghasilan (Excel) *", type=['xlsx'], key="income_uploader")
+        uploaded_order_bytes = st.session_state.get("uploaded_order_bytes")
+        uploaded_income_bytes = st.session_state.get("uploaded_income_bytes")
+        uploaded_order = io.BytesIO(uploaded_order_bytes) if uploaded_order_bytes else None
+        uploaded_income = io.BytesIO(uploaded_income_bytes) if uploaded_income_bytes else None
         uploaded_hpp = st.file_uploader(
             "3. Laporan Master HPP Periode Ini (Opsional)", 
             type=['xlsx'],
@@ -1994,12 +2008,21 @@ elif menu == "reconciliation":
         )
         # Simpan sumber upload agar tab Pemetaan tetap dapat membaca daftar produk
         # walaupun pengguna berpindah menu sebelum menjalankan rekonsiliasi.
-        if uploaded_order is not None:
+        if False:
             # Simpan byte aktual dan salinan fisik terisolasi per session, bukan
             # hanya handle UploadedFile yang dapat hilang setelah navigasi menu.
             st.session_state.uploaded_order_bytes = persist_session_order_upload(uploaded_order)
 
-    if not uploaded_order or not uploaded_income:
+    if (uploaded_order is None or uploaded_income is None) and 'result' in st.session_state and not st.session_state.result.empty:
+        st.info("File sumber tidak tersedia, tetapi hasil rekonsiliasi tersimpan. Menampilkan data transaksi aktif.")
+        order_result = st.session_state.result.copy()
+        if 'No.' in order_result.columns:
+            order_result = order_result.drop(columns=['No.'])
+        order_result.insert(0, 'No.', range(1, len(order_result) + 1))
+        st.dataframe(order_result, use_container_width=True, hide_index=True)
+        st.stop()
+
+    if uploaded_order is None or uploaded_income is None:
         st.info("👈 **Silakan unggah Laporan Order dan Laporan Penghasilan Shopee di sidebar sebelah kiri** untuk memulai rekonsiliasi.")
     else:
         # ─── Date range picker ───
@@ -2219,7 +2242,9 @@ elif menu == "reconciliation":
 
             # ─── Filter: kontrol di posisi ini agar filtered_result tersedia untuk ringkasan ───
             # (Tapi filter hanya mempengaruhi tabel dan mini-ringkasan, BUKAN ringkasan global)
-            filter_options = st.session_state.get('filter_options', {})
+            filter_options = st.session_state.get('filter_options') or {}
+            if not filter_options:
+                filter_options = _build_dashboard_filter_options(result)
             allowed_filters = ['No. Pesanan', 'Nama Produk']
             available_filters = [col for col in allowed_filters if col in result.columns]
             # Simpan nilai filter sebelumnya di session_state agar konsisten saat rerun
