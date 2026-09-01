@@ -1149,10 +1149,19 @@ if menu == "dashboard":
             unsafe_allow_html=True,
         )
 
+        # Slot dibuat berurutan agar section selalu tampil sesuai alur dashboard.
+        overview_slot = st.empty()
+        settled_slot = st.empty()
+        projection_slot = st.empty()
+        top_products_slot = st.empty()
+        profitability_slot = st.empty()
+        hpp_health_slot = st.empty()
+        anomaly_slot = st.empty()
+
         # Kesehatan mapping HPP agar angka laba selalu memiliki konteks cakupan biaya.
-        hpp_health_section = st.container(border=True)
+        hpp_health_section = hpp_health_slot.container(border=True)
         hpp_health_section.markdown(
-            '<div class="section-parent-card"><div class="title">HPP Health</div>'
+            '<div class="section-parent-card section-order-hpp"><div class="title">HPP Health</div>'
             '<div class="description">Indikator kelengkapan HPP mapping yang menjadi dasar perhitungan laba.</div></div>',
             unsafe_allow_html=True,
         )
@@ -1180,9 +1189,9 @@ if menu == "dashboard":
         health_cols[2].metric('🔴 HPP Missing', hpp_missing_count)
 
         # Ranking produk: metrik dapat diganti agar produk tidak dinilai dari omzet saja.
-        top_products_section = st.container(border=True)
+        top_products_section = top_products_slot.container(border=True)
         top_products_section.markdown(
-            '<div class="section-parent-card"><div class="title">Top Products</div>'
+            '<div class="section-parent-card section-order-top"><div class="title">Top Products</div>'
             '<div class="description">🏆 Produk Terlaris — omzet tinggi belum tentu laba tinggi.</div></div>',
             unsafe_allow_html=True,
         )
@@ -1213,9 +1222,9 @@ if menu == "dashboard":
                 lambda row: row['Laba'] / row['Omzet'] * 100 if row['Omzet'] > 0 else 0, axis=1
             )
 
-            profitability_section = st.container(border=True)
+            profitability_section = profitability_slot.container(border=True)
             profitability_section.markdown(
-                '<div class="section-parent-card"><div class="title">Produk Paling Menguntungkan</div>'
+                '<div class="section-parent-card section-order-profit"><div class="title">Produk Paling Menguntungkan</div>'
                 '<div class="description">Fokus pada margin laba untuk membantu menentukan produk yang perlu dipertahankan atau dievaluasi.</div></div>',
                 unsafe_allow_html=True,
             )
@@ -1248,8 +1257,8 @@ if menu == "dashboard":
         else:
             top_products_section.info('Belum ada data produk settled untuk dibuat ranking.')
 
-        settled_section = st.container(border=True)
-        settled_section.markdown('<div class="section-parent-card"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
+        settled_section = settled_slot.container(border=True)
+        settled_section.markdown('<div class="section-parent-card section-order-settled"><div class="title">Pesanan Settled</div><div class="description">Ringkasan omzet, biaya, penghasilan, HPP, dan laba dari pesanan yang sudah settled.</div></div>', unsafe_allow_html=True)
 
         # KPI utama pesanan settled
         if 'result' in st.session_state:
@@ -1292,8 +1301,8 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
 
-            projection_section = st.container(border=True)
-            projection_section.markdown('<div class="section-parent-card"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
+            projection_section = projection_slot.container(border=True)
+            projection_section.markdown('<div class="section-parent-card section-order-projection"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
             pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
             projection_section.markdown(
                 f"""
@@ -1346,9 +1355,9 @@ if menu == "dashboard":
                     ).fillna(0).sum())
             except Exception:
                 pass
-            overview_section = st.container(border=True)
+            overview_section = overview_slot.container(border=True)
             overview_section.markdown(
-                '<div class="section-parent-card"><div class="title">Overview Shopee</div>'
+                '<div class="section-parent-card section-order-overview"><div class="title">Overview Shopee</div>'
                 '<div class="description">Angka referensi langsung untuk mencocokkan ringkasan Overview Shopee.</div></div>',
                 unsafe_allow_html=True,
             )
@@ -1363,8 +1372,8 @@ if menu == "dashboard":
                 unsafe_allow_html=True,
             )
             overview_section.caption("Gross Sales mengikuti total Overview Shopee. Net Sales dan Laba Bersih tidak memasukkan pesanan batal.")
-            anomaly_section = st.container(border=True)
-            anomaly_section.markdown('<div class="section-parent-card"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
+            anomaly_section = anomaly_slot.container(border=True)
+            anomaly_section.markdown('<div class="section-parent-card section-order-anomaly"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
                 st.warning(
                     f"Terdapat {cancelled_summary['count']:,} pesanan dibatalkan "
