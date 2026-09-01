@@ -435,12 +435,25 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         (col for col in ['Total Penghasilan', 'Jumlah Pelepasan Dana', 'Penghasilan'] if col in df_income.columns),
         None,
     )
+    refund_columns = [
+        'Jumlah Pengembalian Dana ke Pembeli',
+        'Pengembalian Dana ke Pembeli',
+        'Pengembalian Dana',
+    ]
+    refund_amount = pd.Series(0, index=df_income.index, dtype='float64')
+    for refund_col in refund_columns:
+        if refund_col in df_income.columns:
+            refund_amount = refund_amount.add(
+                pd.to_numeric(df_income[refund_col], errors='coerce').fillna(0).abs(),
+                fill_value=0,
+            )
+    has_refund = refund_amount.gt(0)
     if income_amount_col is not None and 'Harga Produk' in df_income.columns:
         income_amount = pd.to_numeric(df_income[income_amount_col], errors='coerce').fillna(0)
         product_amount = pd.to_numeric(df_income['Harga Produk'], errors='coerce').fillna(0)
-        df_income['Income_Cancelled'] = income_amount.eq(0) & product_amount.gt(0)
+        df_income['Income_Cancelled'] = has_refund | (income_amount.eq(0) & product_amount.gt(0))
     else:
-        df_income['Income_Cancelled'] = False
+        df_income['Income_Cancelled'] = has_refund
     cancelled_order_products = set(
         zip(
             df_income.loc[df_income['Income_Cancelled'], 'No. Pesanan'].astype(str).str.strip(),
@@ -552,7 +565,10 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
     # Pada file Order, No. Resi melekat pada baris SKU. Karena file Income
     # tidak membawa Nama Variasi, gunakan No. Resi sebagai sumber kebenaran
     # item-level: baris tanpa resi bukan item settled dan masuk audit batal.
-    df_merged['Is_Cancelled_Line'] = df_merged['No. Resi'].isna()
+    df_merged['Is_Cancelled_Line'] = (
+        df_merged['No. Resi'].isna()
+        | df_merged['Income_Cancelled'].fillna(False)
+    )
     df_merged['Nama Produk Tampilan'] = df_merged.apply(lambda x: f"{x['Nama Produk']} {x['Nama Variasi']}".strip(), axis=1)
 
     # Agregasi per Nama Produk Tampilan DAN No. Pesanan
