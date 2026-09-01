@@ -1251,21 +1251,30 @@ if menu == "dashboard":
             active_start = st.session_state.get("processed_start_date", "-")
             active_end = st.session_state.get("processed_end_date", "-")
             st.info(f"Data aktif — Order: **{active_order_name}** · Income: **{active_income_name}** · Periode: **{active_start} s.d. {active_end}**")
-            replace_order = st.file_uploader("Laporan Order aktif / baru (.xlsx)", type=["xlsx"], key="order_uploader")
-            replace_income = st.file_uploader("Laporan Income aktif / baru (.xlsx)", type=["xlsx"], key="income_uploader")
+            upload_col_order, upload_col_income = st.columns(2)
+            with upload_col_order:
+                replace_order = st.file_uploader("Laporan Order aktif / baru (.xlsx)", type=["xlsx"], key="order_uploader")
+            with upload_col_income:
+                replace_income = st.file_uploader("Laporan Income aktif / baru (.xlsx)", type=["xlsx"], key="income_uploader")
             with st.form("dashboard_reprocess_form"):
                 replace_start = active_start if active_start != "-" else datetime.now().date()
                 replace_end = active_end if active_end != "-" else replace_start
                 if replace_order is not None:
                     try:
                         replace_min, replace_max = get_order_date_bounds(replace_order)
-                        replace_start = st.date_input("Tanggal Mulai", replace_min, min_value=replace_min, max_value=replace_max, key="replace_date_start")
-                        replace_end = st.date_input("Tanggal Akhir", replace_max, min_value=replace_min, max_value=replace_max, key="replace_date_end")
+                        date_col_start, date_col_end = st.columns(2)
+                        with date_col_start:
+                            replace_start = st.date_input("Tanggal Mulai", replace_min, min_value=replace_min, max_value=replace_max, key="replace_date_start")
+                        with date_col_end:
+                            replace_end = st.date_input("Tanggal Akhir", replace_max, min_value=replace_min, max_value=replace_max, key="replace_date_end")
                     except Exception as exc:
                         st.error(f"Rentang tanggal tidak dapat dibaca: {exc}")
                 else:
-                    replace_start = st.date_input("Tanggal Mulai", replace_start, key="replace_date_start_active")
-                    replace_end = st.date_input("Tanggal Akhir", replace_end, key="replace_date_end_active")
+                    date_col_start, date_col_end = st.columns(2)
+                    with date_col_start:
+                        replace_start = st.date_input("Tanggal Mulai", replace_start, key="replace_date_start_active")
+                    with date_col_end:
+                        replace_end = st.date_input("Tanggal Akhir", replace_end, key="replace_date_end_active")
                 replace_submit = st.form_submit_button("Proses Ulang dengan Filter Tanggal", type="primary", use_container_width=True)
             if replace_submit and replace_start <= replace_end:
                 try:
@@ -1453,6 +1462,15 @@ if menu == "dashboard":
 
         # KPI utama pesanan settled
         if 'result' in st.session_state:
+            settled_rows = result[result['Is_Settled'] == True] if 'Is_Settled' in result.columns else result
+            settled_order_count = settled_rows['No. Pesanan'].dropna().nunique() if 'No. Pesanan' in settled_rows.columns else 0
+            fee_detail = {
+                'Administrasi': abs(int(settled_rows['Biaya Administrasi'].sum())) if 'Biaya Administrasi' in settled_rows.columns else 0,
+                'Ongkir XTRA': abs(int(settled_rows['Biaya Gratis Ongkir XTRA'].sum())) if 'Biaya Gratis Ongkir XTRA' in settled_rows.columns else 0,
+                'Promo XTRA': abs(int(settled_rows['Biaya Promo XTRA'].sum())) if 'Biaya Promo XTRA' in settled_rows.columns else 0,
+                'Proses': abs(int(settled_rows['Biaya Proses Pesanan'].sum())) if 'Biaya Proses Pesanan' in settled_rows.columns else 0,
+                'Pajak': abs(int(settled_rows['Pajak'].sum())) if 'Pajak' in settled_rows.columns else 0,
+            }
             laba_kpi_color = "#10b981" if laba_bersih >= 0 else "#f87171"
             settled_section.markdown(
                 f"""
@@ -1460,17 +1478,17 @@ if menu == "dashboard":
                     <div class="kpi-card kpi-gross">
                         <span class="label">Omzet Kotor</span>
                         <div class="value">Rp {total_omzet:,.0f}</div>
-                        <div class="pct">Subtotal penjualan settled</div>
+                        <div class="pct">{settled_order_count:,} pesanan settled</div>
+                    </div>
+                    <div class="kpi-card kpi-fee">
+                        <span class="label">Total Biaya Shopee</span>
+                        <div class="value">Rp {total_biaya:,.0f}</div>
+                        <div class="pct">Admin Rp {fee_detail['Administrasi']:,} · Ongkir Rp {fee_detail['Ongkir XTRA']:,}<br>Promo Rp {fee_detail['Promo XTRA']:,} · Proses Rp {fee_detail['Proses']:,} · Pajak Rp {fee_detail['Pajak']:,}</div>
                     </div>
                     <div class="kpi-card kpi-net">
                         <span class="label">Penghasilan Bersih</span>
                         <div class="value">Rp {total_penghasilan:,.0f}</div>
                         <div class="pct">Setelah biaya Shopee & penyesuaian</div>
-                    </div>
-                    <div class="kpi-card kpi-fee">
-                        <span class="label">Total Biaya Shopee</span>
-                        <div class="value">Rp {total_biaya:,.0f}</div>
-                        <div class="pct">Fee layanan, admin, dan pajak</div>
                     </div>
                     <div class="kpi-card kpi-hpp">
                         <span class="label">HPP</span>
@@ -2390,14 +2408,14 @@ elif menu in {"reconciliation", "order"}:
                 '<div class="summary-card card-gross">'
                 f'<div class="label">{gross_pct_label}</div>'
                 f'<div class="value">Rp {total_subtotal:,.0f}</div>'
-                '<div class="pct">Nilai Penjualan Produk Settled</div>'
+                f'<div class="pct">{settled_count:,} pesanan settled</div>'
                 '</div>'
             )
             fees_card = (
                 '<div class="summary-card card-fees">'
-                '<div class="label">Total Biaya Layanan</div>'
+                '<div class="label">Total Biaya Shopee</div>'
                 f'<div class="value">Rp {total_biaya:,.0f}</div>'
-                f'<div class="pct">Potongan Biaya: {pct_biaya:.1f}%</div>'
+                f'<div class="pct">Admin Rp {abs(tot_adm):,.0f} · Ongkir Rp {abs(tot_xtra):,.0f}<br>Promo Rp {abs(tot_promo):,.0f} · Proses Rp {abs(tot_proses):,.0f} · Pajak Rp {abs(tot_pajak):,.0f}</div>'
                 '</div>'
             )
             adj_card = ""
@@ -2457,7 +2475,7 @@ elif menu in {"reconciliation", "order"}:
                     '<div class="summary-card card-potential">'
                     '<div class="label">Estimasi Potensi Pending</div>'
                     f'<div class="value">Rp {est_unsettled_net:,.0f}</div>'
-                    f'<div class="pct">Subtotal Rp {unsettled_subtotal:,.0f} (est. fee {effective_fee_ratio*100:.1f}%)</div>'
+                    f'<div class="pct">{unsettled_count:,} pesanan unsettled · Subtotal Rp {unsettled_subtotal:,.0f}<br>Est. biaya {effective_fee_ratio*100:.1f}%</div>'
                     '</div>'
                 )
                 grand_total_card = (
@@ -2493,7 +2511,7 @@ elif menu in {"reconciliation", "order"}:
             st.caption(f"{period_label} · Semua Produk · Ringkasan periode ini tidak berubah saat tabel difilter.")
 
             # Bagian 1: Realisasi Pesanan Selesai (Settled)
-            settled_cards_html = gross_card + fees_card + adj_card + net_card + hpp_card + laba_card + daily_card
+            settled_cards_html = gross_card + fees_card + net_card + adj_card + hpp_card + laba_card + daily_card
             settled_html = (
                 '<div class="section-group">'
                 '<div class="section-header">'
