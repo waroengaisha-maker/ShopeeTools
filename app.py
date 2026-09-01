@@ -462,9 +462,13 @@ def _compute_dashboard_kpis(result_df, hpp_lookup_map):
         konversi = info.get('Konversi', 1) or 1
         return row.get('Jumlah Bersih', 0) * (harga_pokok / konversi)
 
-    total_hpp = int(round(settled.apply(get_item_hpp, axis=1).sum())) if not settled.empty and hpp_lookup_map else 0
-    laba_bersih = total_penghasilan - total_hpp
-    margin_laba = (laba_bersih / total_penghasilan * 100) if total_penghasilan > 0 else 0.0
+    hpp_valid_mask = settled['Nama Produk'].astype(str).isin(hpp_lookup_map) if not settled.empty and 'Nama Produk' in settled.columns else pd.Series(False, index=settled.index)
+    hpp_valid_settled = settled[hpp_valid_mask].copy()
+    total_hpp = int(round(hpp_valid_settled.apply(get_item_hpp, axis=1).sum())) if not hpp_valid_settled.empty else 0
+    valid_penghasilan = int(hpp_valid_settled['Subtotal'].sum() + hpp_valid_settled['Total Biaya'].sum()) if not hpp_valid_settled.empty else 0
+    laba_bersih = valid_penghasilan - total_hpp
+    margin_laba = (laba_bersih / valid_penghasilan * 100) if valid_penghasilan > 0 else 0.0
+    hpp_missing_product_count = int(settled.loc[~hpp_valid_mask, 'Nama Produk'].nunique()) if not settled.empty and 'Nama Produk' in settled.columns else 0
     total_orders_valid = len(df['No. Pesanan'].dropna().unique()) if 'No. Pesanan' in df.columns else 0
     settled_count = len(settled['No. Pesanan'].dropna().unique()) if not settled.empty and 'No. Pesanan' in settled.columns else 0
     unsettled_count = len(unsettled['No. Pesanan'].dropna().unique()) if not unsettled.empty and 'No. Pesanan' in unsettled.columns else 0
@@ -511,6 +515,7 @@ def _compute_dashboard_kpis(result_df, hpp_lookup_map):
         'total_hpp': total_hpp,
         'laba_bersih': laba_bersih,
         'margin_laba': margin_laba,
+        'hpp_missing_product_count': hpp_missing_product_count,
         'total_orders_valid': total_orders_valid,
         'settled_count': settled_count,
         'unsettled_count': unsettled_count,
@@ -1381,7 +1386,8 @@ if menu == "dashboard":
         hpp_health_section.markdown(
             f"**HPP Coverage**  \n"
             f"Produk dengan HPP valid **{hpp_coverage:.1f}%** &nbsp;&nbsp; "
-            f"Produk belum memiliki HPP **{100 - hpp_coverage:.1f}%**"
+            f"Produk belum memiliki HPP **{100 - hpp_coverage:.1f}%**  \n"
+            f"⚠️ Profit dihitung hanya untuk produk dengan HPP terkonfirmasi. Produk belum memiliki HPP: **{hpp_missing_count:,}**"
         )
         health_cols = hpp_health_section.columns(3)
         health_cols[0].metric('🟢 HPP Valid', hpp_auto_valid_count)
@@ -1402,6 +1408,8 @@ if menu == "dashboard":
             key="dashboard_top_products_metric",
         )
         top_settled = result[result['Is_Settled'] == True].copy() if 'Is_Settled' in result.columns else result.copy()
+        if 'Nama Produk' in top_settled.columns:
+            top_settled = top_settled[top_settled['Nama Produk'].astype(str).isin(hpp_lookup)].copy()
         if not top_settled.empty and 'Nama Produk' in top_settled.columns:
             zero_series = pd.Series(0, index=top_settled.index)
             top_settled['_qty'] = pd.to_numeric(top_settled.get('Jumlah Bersih', zero_series), errors='coerce').fillna(0)
@@ -2244,13 +2252,16 @@ elif menu in {"reconciliation", "order"}:
                 )
 
                 # HPP & Laba
-                if not settled.empty and hpp_lookup_map:
-                    s['total_hpp'] = int(round(settled.apply(get_item_hpp_inner, axis=1).sum()))
-                    s['laba_bersih'] = s['total_penghasilan'] - s['total_hpp']
-                    s['margin_laba'] = (s['laba_bersih'] / sub * 100) if sub > 0 else 0.0
+                hpp_valid_settled = settled[settled['Nama Produk'].astype(str).isin(hpp_lookup_map)].copy() if not settled.empty and 'Nama Produk' in settled.columns else pd.DataFrame()
+                if not hpp_valid_settled.empty:
+                    s['total_hpp'] = int(round(hpp_valid_settled.apply(get_item_hpp_inner, axis=1).sum()))
+                    valid_sub = int(hpp_valid_settled['Subtotal'].sum())
+                    valid_income = int(hpp_valid_settled['Subtotal'].sum() + hpp_valid_settled['Total Biaya'].sum())
+                    s['laba_bersih'] = valid_income - s['total_hpp']
+                    s['margin_laba'] = (s['laba_bersih'] / valid_sub * 100) if valid_sub > 0 else 0.0
                 else:
                     s['total_hpp'] = 0
-                    s['laba_bersih'] = s['total_penghasilan']
+                    s['laba_bersih'] = 0
                     s['margin_laba'] = 0.0
 
                 s['est_hpp_unsettled'] = int(round(unsettled.apply(get_item_hpp_inner, axis=1).sum())) if not unsettled.empty and hpp_lookup_map else 0
