@@ -1472,18 +1472,13 @@ if menu == "dashboard":
                         <div class="value" style="color: {laba_kpi_color};">Rp {laba_bersih:,.0f}</div>
                         <div class="pct">Penghasilan - HPP = Laba</div>
                     </div>
-                    <div class="kpi-card kpi-margin">
-                        <span class="label">Pending</span>
-                        <div class="value">{total_pending}</div>
-                        <div class="pct">Pesanan belum settlement</div>
-                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
             projection_section = projection_slot.container(border=True)
-            projection_section.markdown('<div class="section-parent-card section-order-projection"><div class="title">Proyeksi Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
+            projection_section.markdown('<div class="section-parent-card section-order-projection"><div class="title">Pesanan Unsettled</div><div class="description">Estimasi pending berdasarkan pola fee settled dan mapping HPP saat ini. Tidak digabung ke KPI aktual.</div></div>', unsafe_allow_html=True)
             pending_laba_class = "metric-green" if pending_laba >= 0 else "metric-red"
             projection_section.markdown(
                 f"""
