@@ -295,7 +295,7 @@ def _find_session_order_file():
 
 def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=None, settled_fee_ratio=0.0):
     """Menghitung pesanan batal dari file Order, di luar KPI finansial settled."""
-    empty_summary = {'count': 0, 'value': 0, 'income_lost': 0, 'rate': 0.0, 'details': pd.DataFrame(), 'by_type': []}
+    empty_summary = {'count': 0, 'value': 0, 'income_lost': 0, 'seller_count': 0, 'seller_value': 0, 'rate': 0.0, 'details': pd.DataFrame(), 'by_type': []}
     if not order_file_path or not Path(order_file_path).exists():
         return empty_summary
 
@@ -334,6 +334,11 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
             'Cancellation Reason', 'Alasan Batal',
         ]
         type_col = next((col for col in type_candidates if col in cancelled.columns), None)
+        reason_text = cancelled[type_col].astype(str).str.casefold() if type_col else pd.Series('', index=cancelled.index)
+        seller_reason = (
+            reason_text.str.contains(r'dibatalkan oleh penjual|cancelled by seller', regex=True, na=False)
+            | reason_text.str.contains(r'dibatalkan secara otomatis.*penjual|otomatis.*penjual tidak', regex=True, na=False)
+        ) & ~reason_text.str.contains(r'dibatalkan oleh pembeli|cancelled by buyer', regex=True, na=False)
         cancellation_type = (
             cancelled[type_col].map(lambda value: str(value).strip() if pd.notna(value) and str(value).strip() else 'Tidak tersedia')
             if type_col else pd.Series('Tidak tersedia', index=cancelled.index)
@@ -379,6 +384,8 @@ def _build_cancelled_order_summary(order_file_path, start_date=None, end_date=No
             'count': int(cancelled_count),
             'value': cancelled_value,
             'income_lost': income_lost,
+            'seller_count': int(cancelled.loc[seller_reason, 'No. Pesanan'].nunique()),
+            'seller_value': int(line_value.loc[seller_reason].sum()),
             'by_type': by_type,
             'rate': (cancelled_count / denominator * 100) if denominator > 0 else 0.0,
             'details': details,
@@ -1381,6 +1388,37 @@ if menu == "dashboard":
             except Exception:
                 pass
             overview_section = overview_slot.container(border=True)
+            total_order_count = order_audit['No. Pesanan'].nunique() if not order_audit.empty else 0
+            seller_cancel_rate = (
+                cancelled_summary['seller_count'] / total_order_count * 100
+                if total_order_count > 0 else 0
+            )
+            unresolved_7d_rate = 0.0
+            unresolved_7d_count = 0
+            seller_cancel_7d_count = 0
+            buyer_return_7d_count = 0
+            if not order_audit.empty:
+                # Shopee mereset metrik ini setiap Minggu; gunakan minggu
+                # berjalan (Senin-Minggu), bukan rolling 7 hari kalender.
+                period_end = pd.to_datetime(proc_end).normalize()
+                seven_day_start = period_end - pd.Timedelta(days=period_end.weekday())
+                recent_orders = order_audit[
+                    (order_audit['Waktu Pesanan Dibuat'] >= seven_day_start)
+                    & (order_audit['Waktu Pesanan Dibuat'] <= pd.to_datetime(proc_end).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+                ].copy()
+                recent_orders['reason_text'] = recent_orders.get('Alasan Pembatalan', pd.Series('', index=recent_orders.index)).astype(str).str.casefold()
+                seller_mask = (
+                    recent_orders['reason_text'].str.contains(r'dibatalkan oleh penjual|cancelled by seller', regex=True, na=False)
+                    | recent_orders['reason_text'].str.contains(r'dibatalkan secara otomatis.*penjual|otomatis.*penjual tidak', regex=True, na=False)
+                ) & ~recent_orders['reason_text'].str.contains(r'dibatalkan oleh pembeli|cancelled by buyer', regex=True, na=False)
+                return_text = recent_orders.get('Status Pembatalan/ Pengembalian', pd.Series('', index=recent_orders.index)).astype(str).str.casefold()
+                returned_qty = pd.to_numeric(recent_orders.get('Returned quantity', pd.Series(0, index=recent_orders.index)), errors='coerce').fillna(0)
+                return_mask = return_text.str.contains(r'kembali|return|refund', regex=True, na=False) | returned_qty.gt(0)
+                seller_cancel_7d_count = int(recent_orders.loc[seller_mask, 'No. Pesanan'].nunique())
+                buyer_return_7d_count = int(recent_orders.loc[return_mask, 'No. Pesanan'].nunique())
+                unresolved_7d_count = int(recent_orders.loc[seller_mask | return_mask, 'No. Pesanan'].nunique())
+                recent_order_count = int(recent_orders['No. Pesanan'].nunique())
+                unresolved_7d_rate = unresolved_7d_count / recent_order_count * 100 if recent_order_count else 0.0
             overview_section.markdown(
                 '<div class="section-parent-card section-order-overview"><div class="title">Overview Shopee</div>'
                 '<div class="description">Angka referensi langsung untuk mencocokkan ringkasan Overview Shopee.</div></div>',
@@ -1388,11 +1426,17 @@ if menu == "dashboard":
             )
             overview_section.markdown(
                 f'''<div class="section-card-grid risk-card-grid">
-                    <div class="section-metric-card metric-blue"><span class="label">Total Penjualan / Gross Sales</span><div class="value">Rp {order_file_total:,.0f}</div><div class="sub">Total subtotal pesanan</div></div>
-                    <div class="section-metric-card metric-blue"><span class="label">Total Pesanan</span><div class="value">{order_audit['No. Pesanan'].nunique() if not order_audit.empty else 0:,}</div><div class="sub">Semua status pesanan</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Total Penjualan / Gross Sales</span><div class="value">Rp {order_file_total:,.0f}</div><div class="sub">Net Sales + Nilai Pesanan Batal</div></div>
+                    <div class="section-metric-card metric-green"><span class="label">Net Sales</span><div class="value">Rp {net_sales_shopee:,.0f}</div><div class="sub">Pesanan Settled + Pending</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Pesanan Settled</span><div class="value">Rp {total_omzet:,.0f}</div><div class="sub">Masuk penghasilan aktual</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Pesanan Pending</span><div class="value">Rp {pending_omzet:,.0f}</div><div class="sub">Masih menunggu settlement</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Nilai Pesanan Batal</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Ditambahkan ke Gross Sales</div></div>
+                    <div class="section-metric-card metric-amber"><span class="label">Valid Tanpa No. Resi</span><div class="value">Rp {no_resi_value:,.0f}</div><div class="sub">{no_resi_count:,} pesanan; termasuk Pending</div></div>
                     <div class="section-metric-card metric-red"><span class="label">Pesanan Dibatalkan</span><div class="value">{cancelled_summary['count']:,}</div><div class="sub">Order berstatus batal</div></div>
-                    <div class="section-metric-card metric-orange"><span class="label">Nilai Pesanan Batal</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Termasuk dalam Gross Sales</div></div>
-                    <div class="section-metric-card metric-amber"><span class="label">Tingkat Pembatalan</span><div class="value">{cancelled_summary['rate']:.2f}%</div><div class="sub">Dari seluruh order periode ini</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Dibatalkan oleh Toko</span><div class="value">{cancelled_summary['seller_count']:,}</div><div class="sub">{seller_cancel_rate:.2f}% dari seluruh order · Rp {cancelled_summary['seller_value']:,.0f}</div></div>
+                    <div class="section-metric-card metric-amber"><span class="label">Tingkat Pembatalan Global</span><div class="value">{cancelled_summary['rate']:.2f}%</div><div class="sub">Seluruh pesanan batal ÷ seluruh order</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Total Pesanan</span><div class="value">{total_order_count:,}</div><div class="sub">Semua status pesanan</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Tidak Terselesaikan (Minggu Berjalan)</span><div class="value">{unresolved_7d_rate:.2f}%</div><div class="sub">Senin-Minggu · {unresolved_7d_count:,} order · Toko {seller_cancel_7d_count:,} · Return {buyer_return_7d_count:,}</div></div>
                 </div>''',
                 unsafe_allow_html=True,
             )
@@ -1425,24 +1469,41 @@ if menu == "dashboard":
                     {'Komponen': 'Pesanan Settled', 'Nilai': f"Rp {total_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales dan Laba'},
                     {'Komponen': 'Pesanan Pending', 'Nilai': f"Rp {pending_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales, laba masih proyeksi'},
                     {'Komponen': 'Pesanan valid tanpa No. Resi', 'Nilai': f"Rp {no_resi_value:,.0f}", 'Perlakuan': f"{no_resi_count:,} pesanan; termasuk Pending"},
-                    {'Komponen': 'Pesanan Dibatalkan', 'Nilai': f"Rp {cancelled_summary['value']:,.0f}", 'Perlakuan': 'Hanya masuk Gross Sales'},
                     {'Komponen': 'Net Sales', 'Nilai': f"Rp {net_sales_shopee:,.0f}", 'Perlakuan': 'Settled + Pending'},
                     {'Komponen': 'Gross Sales Shopee', 'Nilai': f"Rp {order_file_total:,.0f}", 'Perlakuan': 'Total subtotal pesanan dari file Order'},
-                    {'Komponen': 'Total Subtotal Pesanan (File Order)', 'Nilai': f"Rp {order_file_total:,.0f}", 'Perlakuan': 'Acuan total penjualan bruto Shopee'},
                 ])
-                st.dataframe(sales_detail, use_container_width=True, hide_index=True)
-                if not no_resi.empty:
-                    st.markdown("#### Audit transaksi valid tanpa No. Resi")
-                    audit_columns = [
-                        column for column in [
-                            'No. Pesanan', 'Status Pesanan', 'Waktu Pesanan Dibuat',
-                            'Nama Produk', 'Nama Variasi', 'Jumlah', 'Subtotal Pesanan',
-                        ] if column in no_resi.columns
-                    ]
-                    audit_detail = no_resi[audit_columns].copy()
-                    if 'Subtotal Pesanan' in audit_detail.columns:
-                        audit_detail['Subtotal Pesanan'] = no_resi['audit_value'].map(lambda value: f"Rp {value:,.0f}")
-                    st.dataframe(audit_detail, use_container_width=True, hide_index=True)
+                sales_cards = ''.join(
+                    f'''<div class="section-metric-card metric-blue">
+                        <span class="label">{html.escape(str(row['Komponen']))}</span>
+                        <div class="value">{html.escape(str(row['Nilai']))}</div>
+                        <div class="sub">{html.escape(str(row['Perlakuan']))}</div>
+                    </div>'''
+                    for _, row in sales_detail.iterrows()
+                )
+                st.markdown(
+                    f'<div class="section-card-grid" style="grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">{sales_cards}</div>',
+                    unsafe_allow_html=True,
+                )
+            returns_section = st.container(border=True)
+            returns_section.markdown(
+                '<div class="section-parent-card"><div class="title">Retur &amp; Pengembalian Dana</div>'
+                '<div class="description">Audit transaksi yang perlu ditelusuri terkait status pengiriman, retur, dan pengembalian dana.</div></div>',
+                unsafe_allow_html=True,
+            )
+            if not no_resi.empty:
+                returns_section.markdown("#### Audit Pesanan Valid Tanpa No. Resi")
+                audit_columns = [
+                    column for column in [
+                        'No. Pesanan', 'Status Pesanan', 'Waktu Pesanan Dibuat',
+                        'Nama Produk', 'Nama Variasi', 'Jumlah', 'Subtotal Pesanan',
+                    ] if column in no_resi.columns
+                ]
+                audit_detail = no_resi[audit_columns].copy()
+                if 'Subtotal Pesanan' in audit_detail.columns:
+                    audit_detail['Subtotal Pesanan'] = no_resi['audit_value'].map(lambda value: f"Rp {value:,.0f}")
+                returns_section.dataframe(audit_detail, use_container_width=True, hide_index=True)
+            else:
+                returns_section.info("Tidak ada transaksi valid tanpa No. Resi pada periode ini.")
             if cancelled_summary.get('by_type'):
                 anomaly_section.markdown("#### Estimasi Penghasilan Hilang berdasarkan Tipe Pembatalan")
                 type_cards = ''.join(
