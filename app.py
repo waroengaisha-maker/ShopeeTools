@@ -2025,6 +2025,92 @@ elif menu in {"reconciliation", "order"}:
     if uploaded_order is None or uploaded_income is None:
         st.info("👈 **Silakan unggah Laporan Order dan Laporan Penghasilan Shopee di sidebar sebelah kiri** untuk memulai rekonsiliasi.")
     else:
+        # Menu Order hanya menampilkan filter dan detail transaksi.
+        if menu == "order":
+            st.subheader("📋 Detail Data Transaksi & Produk")
+            order_filter_options = st.session_state.get("filter_options") or {}
+            if not order_filter_options:
+                order_filter_options = _build_dashboard_filter_options(st.session_state.result)
+            filter_cols = st.columns(5)
+            with filter_cols[0]:
+                order_period = st.multiselect("Periode", order_filter_options.get("Periode", []), key="order_filter_period")
+            with filter_cols[1]:
+                order_product = st.multiselect("Produk", order_filter_options.get("Produk", []), key="order_filter_product")
+            with filter_cols[2]:
+                order_sku = st.multiselect("SKU", order_filter_options.get("SKU", []), key="order_filter_sku")
+            with filter_cols[3]:
+                order_settlement = st.multiselect("Status Settlement", order_filter_options.get("Status Settlement", []), key="order_filter_settlement")
+            with filter_cols[4]:
+                order_return = st.multiselect("Status Retur", order_filter_options.get("Status Retur", []), key="order_filter_return")
+            order_filtered = _apply_dashboard_filters(
+                st.session_state.result, order_period, order_product, order_sku,
+                order_settlement, order_return
+            )
+            order_display = order_filtered.copy()
+            if "No." in order_display.columns:
+                order_display = order_display.drop(columns=["No."])
+            order_display.insert(0, "No.", range(1, len(order_display) + 1))
+            st.caption(f"Menampilkan {len(order_filtered)} baris dari {len(st.session_state.result)} baris data.")
+            st.dataframe(order_display, use_container_width=True, hide_index=True)
+
+            # Rekap produk tetap tersedia di Order untuk kebutuhan audit,
+            # tanpa membawa kartu ringkasan finansial Dashboard.
+            with st.expander("📦 Rekapitulasi Penjualan & Margin Laba per Produk (Sudah Settlement)", expanded=True):
+                st.caption("Grouping berdasarkan Nama Produk dan Harga (@). Total Penjualan (Gross Sales) diambil dari akumulasi subtotal transaksi.")
+                recap_table = pd.DataFrame()
+                if not order_filtered.empty and "Nama Produk" in order_filtered.columns:
+                    recap_hpp_source = uploaded_hpp if uploaded_hpp is not None else None
+                    if recap_hpp_source is not None:
+                        recap_hpp_source.seek(0)
+                    recap_hpp_master = load_hpp_master(file_source=recap_hpp_source)
+                    recap_products = order_filtered["Nama Produk"].dropna().unique().tolist()
+                    recap_mapping = auto_suggest_mapping(recap_products, recap_hpp_master)
+                    recap_by_key = {r["ItemKey"]: r.to_dict() for _, r in recap_hpp_master.iterrows()}
+                    recap_hpp_lookup = {p: recap_by_key[k] for p, k in recap_mapping.items() if k in recap_by_key}
+                    recap_table = generate_product_summary(order_filtered, hpp_lookup=recap_hpp_lookup)
+                    recap_table = recap_table.rename(columns={
+                        "Total Jumlah Bersih": "Qty Terjual Bersih",
+                        "Total Penjualan Bersih": "Total Penjualan (Gross Sales)",
+                        "Margin Laba (%)": "Margin (%)",
+                    })
+                    recap_columns = [
+                        "No.", "Nama Produk", "Qty Terjual Bersih", "Satuan", "Harga (@)",
+                        "Total Penjualan (Gross Sales)", "HPP (@)", "Total HPP", "Laba Bersih", "Margin (%)"
+                    ]
+                    recap_table = recap_table.reindex(columns=[c for c in recap_columns if c in recap_table.columns])
+                    recap_config = {
+                        "Qty Terjual Bersih": st.column_config.NumberColumn("Qty Terjual Bersih", format="%d"),
+                        "Harga (@)": st.column_config.NumberColumn("Harga (@)", format="%,d"),
+                        "Total Penjualan (Gross Sales)": st.column_config.NumberColumn("Total Penjualan (Gross Sales)", format="%,d"),
+                        "HPP (@)": st.column_config.NumberColumn("HPP (@)", format="%,d"),
+                        "Total HPP": st.column_config.NumberColumn("Total HPP", format="%,d"),
+                        "Laba Bersih": st.column_config.NumberColumn("Laba Bersih", format="%,d"),
+                        "Margin (%)": st.column_config.NumberColumn("Margin (%)", format="%.2f%%"),
+                    }
+                    st.dataframe(recap_table, use_container_width=True, hide_index=True, column_config=recap_config)
+                else:
+                    st.info("Tidak ada data untuk direkap.")
+            export_buffer = io.BytesIO()
+            with pd.ExcelWriter(export_buffer, engine="xlsxwriter") as writer:
+                order_filtered.to_excel(writer, sheet_name="Detail Transaksi", index=False)
+                if not recap_table.empty:
+                    recap_table.to_excel(writer, sheet_name="Rekap Produk", index=False)
+            export_start = st.session_state.get("processed_start_date")
+            export_end = st.session_state.get("processed_end_date")
+            if export_start and export_end:
+                export_period = f"{export_start:%Y%m%d}-{export_end:%Y%m%d}"
+            else:
+                export_period = "semua-periode"
+            export_timestamp = datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                "📥 Unduh Laporan Excel Lengkap (.xlsx)",
+                data=export_buffer.getvalue(),
+                file_name=f"hasil_rekonsiliasi_order_{export_period}_{export_timestamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+            )
+            st.stop()
+
         # ─── Date range picker ───
         if 'date_bounds' not in st.session_state:
             min_date, max_date = get_order_date_bounds(uploaded_order)
