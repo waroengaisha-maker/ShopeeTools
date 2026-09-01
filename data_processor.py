@@ -409,9 +409,9 @@ def process_reconciliation(order_file, income_file, start_date=None, end_date=No
         df_order = df_order[(df_order['Waktu Pesanan Dibuat_dt'] >= start_dt) & (df_order['Waktu Pesanan Dibuat_dt'] <= end_dt)]
         df_order = df_order.drop(columns=['Waktu Pesanan Dibuat_dt'], errors='ignore')
 
-    # Filter: Status Pesanan != 'Batal' & != 'Belum Bayar' AND No. Resi is not null
+    # Filter status transaksi. No. Resi tidak dijadikan syarat karena Shopee
+    # tetap memasukkan pesanan valid tanpa resi ke total penjualan.
     df_order = df_order[~df_order['Status Pesanan'].isin(['Batal', 'Belum Bayar'])]
-    df_order = df_order[df_order['No. Resi'].notna()]
 
     # Hapus tanda titik pemisah ribuan dari kolom Harga Setelah Diskon
     df_order['Harga Setelah Diskon'] = (

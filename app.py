@@ -1315,6 +1315,54 @@ if menu == "dashboard":
                 end_date=proc_end,
                 settled_fee_ratio=(abs(total_biaya) / total_omzet if total_omzet > 0 else 0.0),
             )
+            net_sales_shopee = total_omzet + pending_omzet
+            gross_sales_shopee = net_sales_shopee + cancelled_summary['value']
+            no_resi_value = 0
+            no_resi_count = 0
+            no_resi = pd.DataFrame()
+            order_audit = pd.DataFrame()
+            order_file_total = gross_sales_shopee
+            try:
+                order_audit = pd.read_excel(daily_order_file, sheet_name='orders') if daily_order_file else pd.DataFrame()
+                if not order_audit.empty:
+                    order_audit['Waktu Pesanan Dibuat'] = pd.to_datetime(order_audit['Waktu Pesanan Dibuat'], errors='coerce')
+                    order_audit = order_audit[
+                        (order_audit['Waktu Pesanan Dibuat'] >= pd.to_datetime(proc_start).normalize())
+                        & (order_audit['Waktu Pesanan Dibuat'] <= pd.to_datetime(proc_end).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+                    ]
+                    no_resi = order_audit[
+                        ~order_audit['Status Pesanan'].isin(['Batal', 'Belum Bayar'])
+                        & order_audit['No. Resi'].isna()
+                    ].copy()
+                    no_resi['audit_value'] = pd.to_numeric(
+                        no_resi['Subtotal Pesanan'].astype(str).str.replace('.', '', regex=False).str.replace(',', '', regex=False),
+                        errors='coerce',
+                    ).fillna(0)
+                    no_resi_value = int(no_resi['audit_value'].sum())
+                    no_resi_count = int(no_resi['No. Pesanan'].nunique())
+                    order_file_total = int(pd.to_numeric(
+                        order_audit['Subtotal Pesanan'].astype(str).str.replace('.', '', regex=False).str.replace(',', '', regex=False),
+                        errors='coerce',
+                    ).fillna(0).sum())
+            except Exception:
+                pass
+            overview_section = st.container(border=True)
+            overview_section.markdown(
+                '<div class="section-parent-card"><div class="title">Overview Shopee</div>'
+                '<div class="description">Angka referensi langsung untuk mencocokkan ringkasan Overview Shopee.</div></div>',
+                unsafe_allow_html=True,
+            )
+            overview_section.markdown(
+                f'''<div class="section-card-grid risk-card-grid">
+                    <div class="section-metric-card metric-blue"><span class="label">Total Penjualan / Gross Sales</span><div class="value">Rp {order_file_total:,.0f}</div><div class="sub">Total subtotal pesanan</div></div>
+                    <div class="section-metric-card metric-blue"><span class="label">Total Pesanan</span><div class="value">{order_audit['No. Pesanan'].nunique() if not order_audit.empty else 0:,}</div><div class="sub">Semua status pesanan</div></div>
+                    <div class="section-metric-card metric-red"><span class="label">Pesanan Dibatalkan</span><div class="value">{cancelled_summary['count']:,}</div><div class="sub">Order berstatus batal</div></div>
+                    <div class="section-metric-card metric-orange"><span class="label">Nilai Pesanan Batal</span><div class="value">Rp {cancelled_summary['value']:,.0f}</div><div class="sub">Termasuk dalam Gross Sales</div></div>
+                    <div class="section-metric-card metric-amber"><span class="label">Tingkat Pembatalan</span><div class="value">{cancelled_summary['rate']:.2f}%</div><div class="sub">Dari seluruh order periode ini</div></div>
+                </div>''',
+                unsafe_allow_html=True,
+            )
+            overview_section.caption("Gross Sales mengikuti total Overview Shopee. Net Sales dan Laba Bersih tidak memasukkan pesanan batal.")
             anomaly_section = st.container(border=True)
             anomaly_section.markdown('<div class="section-parent-card"><div class="title">Anomali &amp; Risiko</div><div class="description">Ringkasan dampak pesanan yang dibatalkan.</div></div>', unsafe_allow_html=True)
             if cancelled_summary['count'] > 0:
@@ -1329,21 +1377,6 @@ if menu == "dashboard":
             anomaly_section.markdown(
                 f"""
                 <div class="section-card-grid risk-card-grid">
-                    <div class="section-metric-card metric-red">
-                        <span class="label">Pesanan Dibatalkan</span>
-                        <div class="value">{cancelled_summary['count']:,}</div>
-                        <div class="sub">Order berstatus batal</div>
-                    </div>
-                    <div class="section-metric-card metric-orange">
-                        <span class="label">Nilai Pesanan Batal</span>
-                        <div class="value">Rp {cancelled_summary['value']:,.0f}</div>
-                        <div class="sub">Estimasi nilai bruto</div>
-                    </div>
-                    <div class="section-metric-card metric-amber">
-                        <span class="label">Tingkat Pembatalan</span>
-                        <div class="value">{cancelled_summary['rate']:.2f}%</div>
-                        <div class="sub">Dari seluruh order periode ini</div>
-                    </div>
                     <div class="section-metric-card metric-blue">
                         <span class="label">Estimasi Penghasilan Hilang</span>
                         <div class="value">Rp {cancelled_summary['income_lost']:,.0f}</div>
@@ -1353,7 +1386,29 @@ if menu == "dashboard":
                 """,
                 unsafe_allow_html=True,
             )
-            anomaly_section.caption("Pesanan dibatalkan tidak masuk perhitungan Omzet, Penghasilan, HPP, maupun Laba Bersih.")
+            with overview_section.expander("Lihat detail rekonsiliasi Gross Sales & Net Sales", expanded=False):
+                sales_detail = pd.DataFrame([
+                    {'Komponen': 'Pesanan Settled', 'Nilai': f"Rp {total_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales dan Laba'},
+                    {'Komponen': 'Pesanan Pending', 'Nilai': f"Rp {pending_omzet:,.0f}", 'Perlakuan': 'Masuk Net Sales, laba masih proyeksi'},
+                    {'Komponen': 'Pesanan valid tanpa No. Resi', 'Nilai': f"Rp {no_resi_value:,.0f}", 'Perlakuan': f"{no_resi_count:,} pesanan; termasuk Pending"},
+                    {'Komponen': 'Pesanan Dibatalkan', 'Nilai': f"Rp {cancelled_summary['value']:,.0f}", 'Perlakuan': 'Hanya masuk Gross Sales'},
+                    {'Komponen': 'Net Sales', 'Nilai': f"Rp {net_sales_shopee:,.0f}", 'Perlakuan': 'Settled + Pending'},
+                    {'Komponen': 'Gross Sales Shopee', 'Nilai': f"Rp {order_file_total:,.0f}", 'Perlakuan': 'Total subtotal pesanan dari file Order'},
+                    {'Komponen': 'Total Subtotal Pesanan (File Order)', 'Nilai': f"Rp {order_file_total:,.0f}", 'Perlakuan': 'Acuan total penjualan bruto Shopee'},
+                ])
+                st.dataframe(sales_detail, use_container_width=True, hide_index=True)
+                if not no_resi.empty:
+                    st.markdown("#### Audit transaksi valid tanpa No. Resi")
+                    audit_columns = [
+                        column for column in [
+                            'No. Pesanan', 'Status Pesanan', 'Waktu Pesanan Dibuat',
+                            'Nama Produk', 'Nama Variasi', 'Jumlah', 'Subtotal Pesanan',
+                        ] if column in no_resi.columns
+                    ]
+                    audit_detail = no_resi[audit_columns].copy()
+                    if 'Subtotal Pesanan' in audit_detail.columns:
+                        audit_detail['Subtotal Pesanan'] = no_resi['audit_value'].map(lambda value: f"Rp {value:,.0f}")
+                    st.dataframe(audit_detail, use_container_width=True, hide_index=True)
             if cancelled_summary.get('by_type'):
                 anomaly_section.markdown("#### Estimasi Penghasilan Hilang berdasarkan Tipe Pembatalan")
                 type_cards = ''.join(
