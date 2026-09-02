@@ -3205,6 +3205,9 @@ elif menu == "customers":
                     detail_result["Total Biaya"] = detail_result.apply(customer_total_fee, axis=1).astype(int)
                     detail_hpp_lookup = _build_hpp_lookup_for_dashboard(detail_result)
                     detail_result["Penghasilan"] = detail_result["Subtotal"] + detail_result["Total Biaya"].fillna(0)
+                    detail_result["Status Penghasilan"] = detail_result["Is_Settled"].map(
+                        lambda value: "Aktual" if _as_bool(value) else "Estimasi / Belum Final"
+                    ) if "Is_Settled" in detail_result.columns else "Estimasi / Belum Final"
                     def detail_hpp(row):
                         info = detail_hpp_lookup.get(row["Nama Produk"], {})
                         return row["Jumlah Bersih"] * info.get("HargaPokok", 0) / (info.get("Konversi", 1) or 1)
@@ -3225,7 +3228,7 @@ elif menu == "customers":
                         help="Total Penghasilan dikurangi HPP untuk order customer dalam scope Rekonsiliasi aktif. Order dengan HPP UNMAPPED tidak dihitung.",
                     )
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
-                    detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan", "HPP", "Laba Bersih", "HPP Status", "Is_Settled"]
+                    detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan", "Status Penghasilan", "HPP", "Laba Bersih", "HPP Status", "Is_Settled"]
                     st.dataframe(
                         detail_result[[c for c in detail_columns if c in detail_result.columns]],
                         use_container_width=True,
