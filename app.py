@@ -7,7 +7,7 @@ from data_processor import (
     COL_PCT_ADM, COL_PCT_XTRA, COL_PCT_PROMO, COL_PCT_SUB_BIAYA
 )
 from hpp_manager import (
-    load_hpp_master, load_mapping, save_mapping, auto_suggest_mapping,
+    load_hpp_master, load_mapping, save_mapping,
     get_suggestion_with_confidence
 )
 import io
@@ -1373,26 +1373,22 @@ if menu == "dashboard":
         hpp_products = result['Nama Produk'].dropna().astype(str).str.strip().loc[lambda values: values.ne('')].unique()
         hpp_total_products = len(hpp_products)
         confirmed_mapping = load_mapping()
-        hpp_valid_products = [
+        hpp_confirmed_products = [
             product for product in hpp_products
-            if hpp_lookup.get(product, {}).get('HargaPokok', 0) > 0
+            if confirmed_mapping.get(product)
+            and hpp_lookup.get(product, {}).get('HargaPokok', 0) > 0
         ]
-        hpp_manual_products = [
-            product for product in hpp_valid_products if confirmed_mapping.get(product)
-        ]
-        hpp_auto_valid_count = max(len(hpp_valid_products) - len(hpp_manual_products), 0)
-        hpp_missing_count = max(hpp_total_products - len(hpp_valid_products), 0)
-        hpp_coverage = len(hpp_valid_products) / hpp_total_products * 100 if hpp_total_products else 0
+        hpp_missing_count = max(hpp_total_products - len(hpp_confirmed_products), 0)
+        hpp_coverage = len(hpp_confirmed_products) / hpp_total_products * 100 if hpp_total_products else 0
         hpp_health_section.markdown(
             f"**HPP Coverage**  \n"
             f"Produk dengan HPP valid **{hpp_coverage:.1f}%** &nbsp;&nbsp; "
             f"Produk belum memiliki HPP **{100 - hpp_coverage:.1f}%**  \n"
             f"⚠️ Profit dihitung hanya untuk produk dengan HPP terkonfirmasi. Produk belum memiliki HPP: **{hpp_missing_count:,}**"
         )
-        health_cols = hpp_health_section.columns(3)
-        health_cols[0].metric('🟢 HPP Valid', hpp_auto_valid_count)
-        health_cols[1].metric('🟡 HPP Manual', len(hpp_manual_products))
-        health_cols[2].metric('🔴 HPP Missing', hpp_missing_count)
+        health_cols = hpp_health_section.columns(2)
+        health_cols[0].metric('🟢 HPP Confirmed', len(hpp_confirmed_products))
+        health_cols[1].metric('🔴 HPP Missing', hpp_missing_count)
 
         # Ranking produk: metrik dapat diganti agar produk tidak dinilai dari omzet saja.
         top_products_section = top_products_slot.container(border=True)

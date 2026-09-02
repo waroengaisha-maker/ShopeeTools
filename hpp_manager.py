@@ -104,9 +104,3 @@ def get_suggestion_with_confidence(shopee_name, df_hpp):
             best_label = f"{row['KodeItem']} - {row['NamaItem']} [{row['Satuan']} (isi {row['Konversi']:g})]"
 
     return best_key, round(best_score, 3), best_label
-
-
-def auto_suggest_mapping(shopee_product_names, df_hpp):
-    """Legacy compatibility: never mutates or saves the confirmed mapping."""
-    existing_mapping = load_mapping()
-    return existing_mapping
