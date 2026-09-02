@@ -2978,7 +2978,7 @@ elif menu == "customers":
                 customer_summary = customer_orders.groupby(customer_col, as_index=False).agg(
                     **{
                         "Total Orders": ("No. Pesanan", "nunique"),
-                        "Completed Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("selesai").sum())),
+                        "Completed Orders": ("No. Pesanan", "nunique"),
                         "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
                         "Completed Value": ("_completed_spending", "sum"),
                         "Cancelled Order Value": ("_cancelled_spending", "sum"),
@@ -2987,6 +2987,9 @@ elif menu == "customers":
                         "Last Order": ("Waktu Pesanan Dibuat", "max"),
                     }
                 ).rename(columns={customer_col: "Username"})
+                completed_order_mask = customer_orders["Status Pesanan"].astype(str).str.casefold().eq("selesai")
+                completed_order_counts = customer_orders.loc[completed_order_mask].groupby(customer_col)["No. Pesanan"].nunique()
+                customer_summary["Completed Orders"] = customer_summary["Username"].map(completed_order_counts).fillna(0).astype(int)
                 pending_mask = ~customer_orders["Status Pesanan"].astype(str).str.casefold().isin({"selesai", "batal"})
                 pending_spending = customer_orders.loc[pending_mask].groupby(customer_col)["_customer_sales"].sum()
                 customer_summary["Pending Sales"] = customer_summary["Username"].map(pending_spending).fillna(0)
