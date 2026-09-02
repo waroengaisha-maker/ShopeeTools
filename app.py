@@ -2974,6 +2974,22 @@ elif menu == "customers":
                 detail_order_ids = detail["No. Pesanan"].astype(str).unique().tolist()
                 detail_result = st.session_state.get("result", pd.DataFrame()).copy()
                 detail_result = detail_result[detail_result["No. Pesanan"].astype(str).isin(detail_order_ids)].copy() if not detail_result.empty and "No. Pesanan" in detail_result.columns else pd.DataFrame()
+                reconciliation_order_count = (
+                    detail_result["No. Pesanan"].astype(str).nunique()
+                    if not detail_result.empty and "No. Pesanan" in detail_result.columns
+                    else 0
+                )
+                detail_scope_cols = st.columns(2)
+                detail_scope_cols[0].metric("Customer Orders", f"{len(detail_order_ids):,}")
+                detail_scope_cols[1].metric("Orders in Reconciliation", f"{reconciliation_order_count:,}")
+                reconciliation_period = _format_processed_period(
+                    st.session_state.get("processed_start_date"),
+                    st.session_state.get("processed_end_date"),
+                )
+                st.caption(
+                    f"Data keuangan customer mengikuti periode Rekonsiliasi aktif ({reconciliation_period}). "
+                    "Customer Orders berasal dari seluruh file Order aktif."
+                )
                 if not detail_result.empty:
                     detail_hpp_lookup = _build_hpp_lookup_for_dashboard(detail_result)
                     detail_result["Penghasilan"] = detail_result["Subtotal"] + detail_result["Total Biaya"].fillna(0)
