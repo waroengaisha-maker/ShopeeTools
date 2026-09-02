@@ -22,6 +22,25 @@ import uuid
 import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+
+def _parse_shopee_rupiah_series(series):
+    """Parse nominal Shopee Indonesia seperti ``10.590`` sebagai Rp10,590."""
+    def parse_value(value):
+        if pd.isna(value):
+            return 0
+        if isinstance(value, (int, float)):
+            return int(round(value))
+        text = str(value).strip().replace("Rp", "").replace(" ", "")
+        if not text:
+            return 0
+        # Pada export Shopee, titik/koma adalah pemisah ribuan.
+        text = text.replace(".", "").replace(",", "")
+        try:
+            return int(round(float(text)))
+        except (TypeError, ValueError):
+            return 0
+    return series.map(parse_value).astype("int64")
 from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
@@ -1121,7 +1140,7 @@ html, body, [class*="css"] {
 
 # ─── Sidebar Navigation ───
 menu = st.query_params.get("page", "dashboard")
-if menu not in {"dashboard", "order", "reconciliation", "hpp", "stock", "settings"}:
+if menu not in {"dashboard", "order", "reconciliation", "customers", "hpp", "stock", "settings"}:
     menu = "dashboard"
 session_query = f"session={st.session_state.session_id}"
 
@@ -1139,12 +1158,17 @@ with st.sidebar:
     hpp_active = " active" if menu == "hpp" else ""
     stock_active = " active" if menu == "stock" else ""
     settings_active = " active" if menu == "settings" else ""
+    customers_active = " active" if menu == "customers" else ""
     st.markdown(
         f'<a class="sidebar-nav-link{dashboard_active}" href="?{session_query}" target="_self">🏠 Dashboard</a>',
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<a class="sidebar-nav-link{reconciliation_active}" href="?page=order&{session_query}" target="_self">📋 Order</a>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<a class="sidebar-nav-link{customers_active}" href="?page=customers&{session_query}" target="_self">👥 Customers</a>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -2877,6 +2901,76 @@ elif menu in {"reconciliation", "order"}:
 # ==============================================================================
 # 📦 MENU 3: KELOLA MASTER HPP
 # ==============================================================================
+elif menu == "customers":
+    st.title("👥 Customers")
+    st.write("Ringkasan pelanggan berdasarkan file Order aktif dari Dashboard.")
+    customer_file = _find_session_order_file()
+    if not customer_file:
+        st.info("Belum ada file Order aktif. Unggah dan proses file dari Dashboard terlebih dahulu.")
+    else:
+        try:
+            customer_orders = pd.read_excel(customer_file, sheet_name="orders")
+            customer_col = "Username (Pembeli)"
+            if customer_col not in customer_orders.columns:
+                st.warning("Kolom Username (Pembeli) tidak ditemukan pada file Order.")
+            else:
+                customer_orders[customer_col] = customer_orders[customer_col].fillna("(Tanpa Username)").astype(str).str.strip()
+                customer_orders["Waktu Pesanan Dibuat"] = pd.to_datetime(customer_orders["Waktu Pesanan Dibuat"], errors="coerce")
+                if "Subtotal Pesanan" in customer_orders.columns:
+                    customer_orders["Subtotal Pesanan"] = _parse_shopee_rupiah_series(customer_orders["Subtotal Pesanan"])
+                else:
+                    customer_orders["Subtotal Pesanan"] = 0
+                customer_orders = customer_orders.dropna(subset=["No. Pesanan"])
+                customer_orders = customer_orders.drop_duplicates([customer_col, "No. Pesanan", "Status Pesanan"])
+                customer_summary = customer_orders.groupby(customer_col, as_index=False).agg(
+                    **{
+                        "Total Orders": ("No. Pesanan", "nunique"),
+                        "Completed Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("selesai").sum())),
+                        "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
+                        "Total Spending": ("Subtotal Pesanan", "sum"),
+                        "First Order": ("Waktu Pesanan Dibuat", "min"),
+                        "Last Order": ("Waktu Pesanan Dibuat", "max"),
+                    }
+                ).rename(columns={customer_col: "Username"})
+                customer_summary["Average Order Value"] = customer_summary["Total Spending"] / customer_summary["Total Orders"].replace(0, 1)
+                def repeat_status(completed_orders):
+                    if completed_orders == 0:
+                        return "Belum Ada Pesanan Selesai"
+                    return "Repeat" if completed_orders > 1 else "One-time"
+                customer_summary["Repeat Status"] = customer_summary["Completed Orders"].map(repeat_status)
+
+                overview_cols = st.columns(4)
+                overview_cols[0].metric("Customers", len(customer_summary))
+                overview_cols[1].metric("Total Orders", int(customer_summary["Total Orders"].sum()))
+                overview_cols[2].metric("Repeat Customers", int((customer_summary["Completed Orders"] > 1).sum()))
+                overview_cols[3].metric("Repeat Rate", f"{(customer_summary['Completed Orders'].gt(1).mean() * 100 if len(customer_summary) else 0):.1f}%")
+
+                st.subheader("Customer List")
+                display_customer = customer_summary.copy()
+                for col in ["First Order", "Last Order"]:
+                    display_customer[col] = display_customer[col].dt.strftime("%Y-%m-%d").fillna("-")
+                st.dataframe(
+                    display_customer.sort_values("Total Orders", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Total Spending": st.column_config.NumberColumn("Total Spending", format="Rp %,d"),
+                        "Average Order Value": st.column_config.NumberColumn("Average Order Value", format="Rp %,d"),
+                    },
+                )
+
+                st.subheader("Customer Detail")
+                selected_customer = st.selectbox("Pilih customer", customer_summary["Username"].sort_values().tolist())
+                detail = customer_orders[customer_orders[customer_col] == selected_customer].sort_values("Waktu Pesanan Dibuat", ascending=False)
+                st.dataframe(detail[[c for c in ["No. Pesanan", "Status Pesanan", "Waktu Pesanan Dibuat", "Nama Produk", "Nama Variasi", "Subtotal Pesanan"] if c in detail.columns]], use_container_width=True, hide_index=True)
+
+                st.subheader("Repeat Customer Analysis")
+                repeat_only = customer_summary[customer_summary["Completed Orders"] > 1]
+                st.caption(f"{len(repeat_only):,} customer melakukan repeat order dari {len(customer_summary):,} customer.")
+        except Exception as exc:
+            st.error("Gagal membaca data customer.")
+            st.exception(exc)
+
 elif menu == "settings":
     st.title("⚙️ Setting")
     st.write("Atur preferensi tampilan dan ambang batas analisis dashboard.")
