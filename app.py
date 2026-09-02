@@ -3232,16 +3232,17 @@ elif menu == "customers":
                         ),
                         axis=1,
                     )
-                    total_customer_net_profit = pd.to_numeric(
-                        detail_result["Laba Bersih"], errors="coerce"
-                    ).sum(min_count=1)
-                    profit_cols = st.columns(1)
-                    profit_cols[0].metric(
-                        "Total Laba Bersih",
-                        f"Rp {int(total_customer_net_profit):,}"
-                        if pd.notna(total_customer_net_profit) else "Belum tersedia",
-                        help="Total Penghasilan dikurangi HPP untuk order customer dalam scope Rekonsiliasi aktif. Order dengan HPP UNMAPPED tidak dihitung.",
-                    )
+                    profit_values = pd.to_numeric(detail_result["Laba Bersih"], errors="coerce")
+                    actual_profit = profit_values.where(detail_result["Status Profit"].eq("Aktual")).sum(min_count=1)
+                    estimated_profit = profit_values.where(detail_result["Status Profit"].eq("Estimasi / Belum Final")).sum(min_count=1)
+                    projected_profit = profit_values.sum(min_count=1)
+                    profit_cols = st.columns(3)
+                    for column, label, value, help_text in [
+                        (profit_cols[0], "Actual Net Profit", actual_profit, "Laba dari order settled dengan HPP confirmed."),
+                        (profit_cols[1], "Estimated Pending Profit", estimated_profit, "Laba estimasi dari order pending dengan HPP confirmed."),
+                        (profit_cols[2], "Projected Customer Net Profit", projected_profit, "Actual Net Profit + Estimated Pending Profit."),
+                    ]:
+                        column.metric(label, f"Rp {int(value):,}" if pd.notna(value) else "Belum tersedia", help=help_text)
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
                     detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan Aktual", "Estimasi Penghasilan", "HPP", "Laba Bersih", "Status Profit", "HPP Status", "Is_Settled"]
                     st.dataframe(
