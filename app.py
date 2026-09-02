@@ -14,6 +14,7 @@ import io
 import hashlib
 import html
 import logging
+import math
 import pickle
 import re
 import shutil
@@ -3035,6 +3036,34 @@ elif menu == "customers":
                         "Total Laba Bersih": st.column_config.NumberColumn("Total Laba Bersih", format="Rp %,d"),
                     },
                 )
+
+                st.markdown('<div class="section-title">📍 Customer Distance</div>', unsafe_allow_html=True)
+                st.caption("Jarak garis lurus dari toko (3.582274, 98.717627).")
+                latitude_col = next((c for c in ["Latitude", "latitude", "Lat", "lat"] if c in customer_orders.columns), None)
+                longitude_col = next((c for c in ["Longitude", "longitude", "Lon", "lon", "Lng", "lng"] if c in customer_orders.columns), None)
+                if latitude_col and longitude_col:
+                    distance_orders = customer_orders[[customer_col, latitude_col, longitude_col]].copy()
+                    distance_orders[latitude_col] = pd.to_numeric(distance_orders[latitude_col], errors="coerce")
+                    distance_orders[longitude_col] = pd.to_numeric(distance_orders[longitude_col], errors="coerce")
+                    distance_orders = distance_orders.dropna(subset=[latitude_col, longitude_col])
+                    if not distance_orders.empty:
+                        def distance_km(row):
+                            lat1, lon1 = math.radians(3.5822738478321146), math.radians(98.71762676169524)
+                            lat2, lon2 = math.radians(row[latitude_col]), math.radians(row[longitude_col])
+                            a = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+                            return 6371 * 2 * math.asin(math.sqrt(a))
+                        distance_summary = distance_orders.assign(**{"Distance (km)": distance_orders.apply(distance_km, axis=1)})
+                        distance_summary = distance_summary.groupby(customer_col, as_index=False)["Distance (km)"].min().rename(columns={customer_col: "Username"})
+                        distance_summary = distance_summary.merge(customer_summary[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]], on="Username", how="left").sort_values("Distance (km)")
+                        st.dataframe(distance_summary, use_container_width=True, hide_index=True, column_config={"Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km")})
+                    else:
+                        st.markdown('<div class="dashboard-meta-card">Koordinat customer tersedia, tetapi belum memiliki nilai yang valid.</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        '<div class="dashboard-meta-card">File Order belum memiliki kolom Latitude dan Longitude customer. '
+                        'Tambahkan koordinat customer agar jarak dapat dihitung.</div>',
+                        unsafe_allow_html=True,
+                    )
 
                 st.markdown('<div class="section-title">🔎 Customer Detail</div>', unsafe_allow_html=True)
                 selected_customer = st.selectbox("Pilih customer", customer_summary["Username"].sort_values().tolist())
