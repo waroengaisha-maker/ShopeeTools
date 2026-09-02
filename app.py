@@ -3218,15 +3218,16 @@ elif menu == "customers":
                         info = detail_hpp_lookup.get(row["Nama Produk"], {})
                         return row["Jumlah Bersih"] * info.get("HargaPokok", 0) / (info.get("Konversi", 1) or 1)
                     detail_result["HPP"] = detail_result.apply(detail_hpp, axis=1)
-                    detail_result["HPP Status"] = detail_result["Nama Produk"].astype(str).isin(detail_hpp_lookup).map({True: "Confirmed", False: "UNMAPPED"})
+                    detail_result["_has_confirmed_hpp"] = detail_result["Nama Produk"].astype(str).isin(detail_hpp_lookup)
+                    detail_result["HPP Status"] = detail_result["_has_confirmed_hpp"].map({True: "Confirmed", False: "UNMAPPED"})
                     detail_result["Laba Bersih"] = detail_result.apply(
-                        lambda row: row["Penghasilan"] - row["HPP"] if row["HPP Status"] == "Confirmed" else pd.NA,
+                        lambda row: row["Penghasilan"] - row["HPP"] if row["_has_confirmed_hpp"] else pd.NA,
                         axis=1,
                     )
                     detail_result["Status Profit"] = detail_result.apply(
                         lambda row: (
                             "Tidak tersedia (HPP Unmapped)"
-                            if row["HPP Status"] != "Confirmed"
+                            if not row["_has_confirmed_hpp"]
                             else "Aktual" if _as_bool(row.get("Is_Settled", False))
                             else "Estimasi / Belum Final"
                         ),
