@@ -2938,24 +2938,39 @@ elif menu == "customers":
                         "Total Orders": ("No. Pesanan", "nunique"),
                         "Completed Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("selesai").sum())),
                         "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
-                        "Completed Spending": ("_completed_spending", "sum"),
-                        "Cancelled Spending": ("_cancelled_spending", "sum"),
+                        "Completed Sales": ("_completed_spending", "sum"),
+                        "Cancelled Sales": ("_cancelled_spending", "sum"),
+                        "Pending Sales": ("Subtotal Pesanan", lambda s: 0),
                         "First Order": ("Waktu Pesanan Dibuat", "min"),
                         "Last Order": ("Waktu Pesanan Dibuat", "max"),
                     }
                 ).rename(columns={customer_col: "Username"})
-                customer_summary["Average Order Value"] = customer_summary["Completed Spending"] / customer_summary["Completed Orders"].replace(0, 1)
-                def repeat_status(completed_orders):
-                    if completed_orders == 0:
-                        return "Belum Ada Pesanan Selesai"
-                    return "Repeat" if completed_orders > 1 else "One-time"
-                customer_summary["Repeat Status"] = customer_summary["Completed Orders"].map(repeat_status)
+                pending_mask = ~customer_orders["Status Pesanan"].astype(str).str.casefold().isin({"selesai", "batal"})
+                pending_spending = customer_orders.loc[pending_mask].groupby(customer_col)["Subtotal Pesanan"].sum()
+                customer_summary["Pending Sales"] = customer_summary["Username"].map(pending_spending).fillna(0)
+                customer_summary["Pending Orders"] = customer_summary["Username"].map(
+                    customer_orders.loc[pending_mask].groupby(customer_col)["No. Pesanan"].nunique()
+                ).fillna(0).astype(int)
+                customer_summary["Average Order Value"] = (
+                    customer_summary["Completed Sales"] + customer_summary["Pending Sales"]
+                ) / customer_summary["Total Orders"].replace(0, 1)
+                customer_column_order = [
+                    "Username", "Total Orders", "Completed Orders", "Pending Orders", "Cancelled Orders",
+                    "Completed Sales", "Pending Sales", "Cancelled Sales", "Average Order Value",
+                    "Repeat Status", "First Order", "Last Order",
+                ]
+                customer_summary = customer_summary[
+                    [column for column in customer_column_order if column in customer_summary.columns]
+                ]
+                def repeat_status(total_orders):
+                    return "Repeat" if total_orders > 1 else "One-time"
+                customer_summary["Repeat Status"] = customer_summary["Total Orders"].map(repeat_status)
 
                 overview_cols = st.columns(4)
                 overview_cols[0].metric("Customers", len(customer_summary))
                 overview_cols[1].metric("Total Orders", int(customer_summary["Total Orders"].sum()))
-                overview_cols[2].metric("Repeat Customers", int((customer_summary["Completed Orders"] > 1).sum()))
-                overview_cols[3].metric("Repeat Rate", f"{(customer_summary['Completed Orders'].gt(1).mean() * 100 if len(customer_summary) else 0):.1f}%")
+                overview_cols[2].metric("Repeat Customers", int((customer_summary["Total Orders"] > 1).sum()))
+                overview_cols[3].metric("Repeat Rate", f"{(customer_summary['Total Orders'].gt(1).mean() * 100 if len(customer_summary) else 0):.1f}%")
 
                 st.markdown('<div class="section-title">📋 Customer List</div>', unsafe_allow_html=True)
                 display_customer = customer_summary.copy()
@@ -2966,7 +2981,14 @@ elif menu == "customers":
                     list_result["No. Pesanan"] = list_result["No. Pesanan"].astype(str)
                     list_result = list_result.merge(order_customer.drop_duplicates("No. Pesanan"), on="No. Pesanan", how="left")
                     list_hpp_lookup = _build_hpp_lookup_for_dashboard(list_result)
-                    settled = list_result[list_result["Is_Settled"] == True].copy() if "Is_Settled" in list_result.columns else pd.DataFrame()
+                    def _as_bool(value):
+                        if isinstance(value, str):
+                            return value.strip().casefold() in {"true", "1", "yes", "ya"}
+                        return bool(value) if pd.notna(value) else False
+                    settled = (
+                        list_result[list_result["Is_Settled"].map(_as_bool) == True].copy()
+                        if "Is_Settled" in list_result.columns else pd.DataFrame()
+                    )
                     hist_subtotal = pd.to_numeric(settled.get("Subtotal", 0), errors="coerce").fillna(0).sum()
                     hist_fee = abs(pd.to_numeric(settled.get("Total Biaya", 0), errors="coerce").fillna(0).sum())
                     hist_process = abs(pd.to_numeric(settled.get("Biaya Proses Pesanan", 0), errors="coerce").fillna(0).sum())
@@ -2981,10 +3003,14 @@ elif menu == "customers":
                         product_ratios[product] = max(fees - proc, 0) / subtotal if subtotal else fee_ratio
 
                     def list_net_profit(row):
+                        # Pending tanpa histori settled tidak punya basis estimasi biaya;
+                        # jangan tampilkan sebagai laba bersih yang seolah-olah aktual.
+                        if not _as_bool(row.get("Is_Settled", True)) and settled.empty:
+                            return pd.NA
                         subtotal = pd.to_numeric(row.get("Subtotal", 0), errors="coerce")
                         subtotal = subtotal if pd.notna(subtotal) else 0
                         fee = pd.to_numeric(row.get("Total Biaya", 0), errors="coerce")
-                        if not bool(row.get("Is_Settled", True)) and not settled.empty:
+                        if not _as_bool(row.get("Is_Settled", True)) and not settled.empty:
                             fee = -round(subtotal * product_ratios.get(row.get("Nama Produk"), fee_ratio) + process_per_order)
                         hpp_info = list_hpp_lookup.get(row.get("Nama Produk"), {})
                         hpp = pd.to_numeric(row.get("Jumlah Bersih", 0), errors="coerce") * hpp_info.get("HargaPokok", 0) / (hpp_info.get("Konversi", 1) or 1)
@@ -3002,8 +3028,9 @@ elif menu == "customers":
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Completed Spending": st.column_config.NumberColumn("Completed Spending", format="Rp %,d"),
-                        "Cancelled Spending": st.column_config.NumberColumn("Cancelled Spending", format="Rp %,d"),
+                        "Completed Sales": st.column_config.NumberColumn("Completed Sales", format="Rp %,d"),
+                        "Cancelled Sales": st.column_config.NumberColumn("Cancelled Sales", format="Rp %,d"),
+                        "Pending Sales": st.column_config.NumberColumn("Pending Sales", format="Rp %,d"),
                         "Average Order Value": st.column_config.NumberColumn("Average Order Value", format="Rp %,d"),
                         "Total Laba Bersih": st.column_config.NumberColumn("Total Laba Bersih", format="Rp %,d"),
                     },
