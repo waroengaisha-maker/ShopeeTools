@@ -3223,6 +3223,15 @@ elif menu == "customers":
                         lambda row: row["Penghasilan"] - row["HPP"] if row["HPP Status"] == "Confirmed" else pd.NA,
                         axis=1,
                     )
+                    detail_result["Status Profit"] = detail_result.apply(
+                        lambda row: (
+                            "Tidak tersedia (HPP Unmapped)"
+                            if row["HPP Status"] != "Confirmed"
+                            else "Aktual" if _as_bool(row.get("Is_Settled", False))
+                            else "Estimasi / Belum Final"
+                        ),
+                        axis=1,
+                    )
                     total_customer_net_profit = pd.to_numeric(
                         detail_result["Laba Bersih"], errors="coerce"
                     ).sum(min_count=1)
@@ -3234,7 +3243,7 @@ elif menu == "customers":
                         help="Total Penghasilan dikurangi HPP untuk order customer dalam scope Rekonsiliasi aktif. Order dengan HPP UNMAPPED tidak dihitung.",
                     )
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
-                    detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan Aktual", "Estimasi Penghasilan", "HPP", "Laba Bersih", "HPP Status", "Is_Settled"]
+                    detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan Aktual", "Estimasi Penghasilan", "HPP", "Laba Bersih", "Status Profit", "HPP Status", "Is_Settled"]
                     st.dataframe(
                         detail_result[[c for c in detail_columns if c in detail_result.columns]],
                         use_container_width=True,
