@@ -2980,8 +2980,8 @@ elif menu == "customers":
                         "Total Orders": ("No. Pesanan", "nunique"),
                         "Completed Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("selesai").sum())),
                         "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
-                        "Completed Sales": ("_completed_spending", "sum"),
-                        "Cancelled Sales": ("_cancelled_spending", "sum"),
+                        "Completed Value": ("_completed_spending", "sum"),
+                        "Cancelled Order Value": ("_cancelled_spending", "sum"),
                         "Pending Sales": ("_customer_sales", lambda s: 0),
                         "First Order": ("Waktu Pesanan Dibuat", "min"),
                         "Last Order": ("Waktu Pesanan Dibuat", "max"),
@@ -2994,11 +2994,11 @@ elif menu == "customers":
                     customer_orders.loc[pending_mask].groupby(customer_col)["No. Pesanan"].nunique()
                 ).fillna(0).astype(int)
                 customer_summary["Average Order Value"] = (
-                    customer_summary["Completed Sales"] + customer_summary["Pending Sales"]
+                    customer_summary["Completed Value"] + customer_summary["Pending Sales"]
                 ) / customer_summary["Total Orders"].replace(0, 1)
                 customer_column_order = [
                     "Username", "Total Orders", "Completed Orders", "Pending Orders", "Cancelled Orders",
-                    "Completed Sales", "Pending Sales", "Cancelled Sales", "Average Order Value",
+                    "Completed Value", "Pending Sales", "Cancelled Order Value", "Average Order Value",
                     "Repeat Status", "First Order", "Last Order",
                 ]
                 customer_summary = customer_summary[
@@ -3070,8 +3070,8 @@ elif menu == "customers":
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Completed Sales": st.column_config.NumberColumn("Completed Sales", format="Rp %,d"),
-                        "Cancelled Sales": st.column_config.NumberColumn("Cancelled Sales", format="Rp %,d"),
+                        "Completed Value": st.column_config.NumberColumn("Completed Value", format="Rp %,d", help="Nilai order selesai setelah retur."),
+                        "Cancelled Order Value": st.column_config.NumberColumn("Cancelled Order Value", format="Rp %,d", help="Nilai order batal; tidak dihitung sebagai revenue."),
                         "Pending Sales": st.column_config.NumberColumn("Pending Sales", format="Rp %,d"),
                         "Average Order Value": st.column_config.NumberColumn("Average Order Value", format="Rp %,d"),
                         "Total Laba Bersih": st.column_config.NumberColumn("Total Laba Bersih", format="Rp %,d"),
@@ -3095,7 +3095,7 @@ elif menu == "customers":
                             return 6371 * 2 * math.asin(math.sqrt(a))
                         distance_summary = distance_orders.assign(**{"Distance (km)": distance_orders.apply(distance_km, axis=1)})
                         distance_summary = distance_summary.groupby(customer_col, as_index=False)["Distance (km)"].min().rename(columns={customer_col: "Username"})
-                        distance_summary = distance_summary.merge(display_customer[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]], on="Username", how="left").sort_values("Distance (km)")
+                        distance_summary = distance_summary.merge(display_customer[["Username", "Total Orders", "Completed Value", "Pending Sales", "Total Laba Bersih"]], on="Username", how="left").sort_values("Distance (km)")
                         st.dataframe(distance_summary, use_container_width=True, hide_index=True, column_config={"Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km")})
                     else:
                         st.markdown('<div class="dashboard-meta-card">Koordinat customer tersedia, tetapi belum memiliki nilai yang valid.</div>', unsafe_allow_html=True)
@@ -3142,7 +3142,7 @@ elif menu == "customers":
                             return 6371 * 2 * math.asin(math.sqrt(a))
                         distance_summary = customer_orders.assign(**{"Distance (km)": customer_orders.apply(cached_distance, axis=1)})
                         distance_summary = distance_summary.groupby(customer_col, as_index=False)["Distance (km)"].min().rename(columns={customer_col: "Username"})
-                        distance_summary = display_customer[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]].merge(distance_summary, on="Username", how="left").sort_values("Distance (km)", na_position="last")
+                        distance_summary = display_customer[["Username", "Total Orders", "Completed Value", "Pending Sales", "Total Laba Bersih"]].merge(distance_summary, on="Username", how="left").sort_values("Distance (km)", na_position="last")
                         distance_summary["Distance Status"] = distance_summary["Distance (km)"].map(lambda value: "Lokasi tidak ditemukan" if pd.isna(value) else "OK")
                         st.dataframe(distance_summary, use_container_width=True, hide_index=True, column_config={"Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km")})
 
