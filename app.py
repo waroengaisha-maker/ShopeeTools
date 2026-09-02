@@ -2963,11 +2963,16 @@ elif menu == "customers":
                     customer_orders["Subtotal Pesanan"] = _parse_shopee_rupiah_series(customer_orders["Subtotal Pesanan"])
                 else:
                     customer_orders["Subtotal Pesanan"] = 0
+                if "Subtotal Pesanan Setelah Retur" in customer_orders.columns:
+                    customer_orders["Subtotal Pesanan Setelah Retur"] = _parse_shopee_rupiah_series(customer_orders["Subtotal Pesanan Setelah Retur"])
+                    customer_orders["_customer_sales"] = customer_orders["Subtotal Pesanan Setelah Retur"]
+                else:
+                    customer_orders["_customer_sales"] = customer_orders["Subtotal Pesanan"]
                 customer_orders["Jumlah"] = pd.to_numeric(customer_orders.get("Jumlah", 0), errors="coerce").fillna(0)
                 customer_orders["Returned quantity"] = pd.to_numeric(customer_orders.get("Returned quantity", 0), errors="coerce").fillna(0)
                 customer_orders["Jumlah Bersih"] = customer_orders["Jumlah"] - customer_orders["Returned quantity"]
-                customer_orders["_completed_spending"] = customer_orders["Subtotal Pesanan"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("selesai"), 0)
-                customer_orders["_cancelled_spending"] = customer_orders["Subtotal Pesanan"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("batal"), 0)
+                customer_orders["_completed_spending"] = customer_orders["_customer_sales"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("selesai"), 0)
+                customer_orders["_cancelled_spending"] = customer_orders["_customer_sales"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("batal"), 0)
                 customer_orders = customer_orders.dropna(subset=["No. Pesanan"])
                 customer_orders = customer_orders.drop_duplicates([customer_col, "No. Pesanan", "Status Pesanan"])
                 customer_summary = customer_orders.groupby(customer_col, as_index=False).agg(
@@ -2977,13 +2982,13 @@ elif menu == "customers":
                         "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
                         "Completed Sales": ("_completed_spending", "sum"),
                         "Cancelled Sales": ("_cancelled_spending", "sum"),
-                        "Pending Sales": ("Subtotal Pesanan", lambda s: 0),
+                        "Pending Sales": ("_customer_sales", lambda s: 0),
                         "First Order": ("Waktu Pesanan Dibuat", "min"),
                         "Last Order": ("Waktu Pesanan Dibuat", "max"),
                     }
                 ).rename(columns={customer_col: "Username"})
                 pending_mask = ~customer_orders["Status Pesanan"].astype(str).str.casefold().isin({"selesai", "batal"})
-                pending_spending = customer_orders.loc[pending_mask].groupby(customer_col)["Subtotal Pesanan"].sum()
+                pending_spending = customer_orders.loc[pending_mask].groupby(customer_col)["_customer_sales"].sum()
                 customer_summary["Pending Sales"] = customer_summary["Username"].map(pending_spending).fillna(0)
                 customer_summary["Pending Orders"] = customer_summary["Username"].map(
                     customer_orders.loc[pending_mask].groupby(customer_col)["No. Pesanan"].nunique()
