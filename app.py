@@ -13,13 +13,17 @@ from hpp_manager import (
 import io
 import hashlib
 import html
+import json
 import logging
 import math
+import os
 import pickle
 import re
 import shutil
 import time
 import uuid
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -42,6 +46,38 @@ def _parse_shopee_rupiah_series(series):
         except (TypeError, ValueError):
             return 0
     return series.map(parse_value).astype("int64")
+
+
+def _customer_geocode_cache_path():
+    return os.path.join(os.path.dirname(__file__), "data", "customer_geocode_cache.json")
+
+
+def _load_customer_geocode_cache():
+    try:
+        with open(_customer_geocode_cache_path(), "r", encoding="utf-8") as cache_file:
+            return json.load(cache_file)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_customer_geocode_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(_customer_geocode_cache_path()), exist_ok=True)
+        with open(_customer_geocode_cache_path(), "w", encoding="utf-8") as cache_file:
+            json.dump(cache, cache_file, ensure_ascii=False, indent=2)
+    except OSError:
+        LOGGER.warning("Customer geocode cache tidak dapat disimpan.")
+
+
+def _geocode_place(place):
+    query = urllib.parse.quote(str(place).strip())
+    request = urllib.request.Request(
+        f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q={query}",
+        headers={"User-Agent": "WarungAishaCustomerDistance/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        results = pd.DataFrame(json.loads(response.read().decode("utf-8")))
+    return (float(results.iloc[0]["lat"]), float(results.iloc[0]["lon"])) if not results.empty else None
 from pathlib import Path
 
 st.set_page_config(layout="wide", page_title="Rekonsiliasi Shopee")
@@ -3054,16 +3090,56 @@ elif menu == "customers":
                             return 6371 * 2 * math.asin(math.sqrt(a))
                         distance_summary = distance_orders.assign(**{"Distance (km)": distance_orders.apply(distance_km, axis=1)})
                         distance_summary = distance_summary.groupby(customer_col, as_index=False)["Distance (km)"].min().rename(columns={customer_col: "Username"})
-                        distance_summary = distance_summary.merge(customer_summary[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]], on="Username", how="left").sort_values("Distance (km)")
+                        distance_summary = distance_summary.merge(display_customer[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]], on="Username", how="left").sort_values("Distance (km)")
                         st.dataframe(distance_summary, use_container_width=True, hide_index=True, column_config={"Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km")})
                     else:
                         st.markdown('<div class="dashboard-meta-card">Koordinat customer tersedia, tetapi belum memiliki nilai yang valid.</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(
-                        '<div class="dashboard-meta-card">File Order belum memiliki kolom Latitude dan Longitude customer. '
-                        'Tambahkan koordinat customer agar jarak dapat dihitung.</div>',
-                        unsafe_allow_html=True,
-                    )
+                    address_col = next((c for c in ["Alamat Pengiriman", "Alamat Pengiriman (Shipping Address)", "Shipping Address"] if c in customer_orders.columns), None)
+                    city_col = address_col or next((c for c in ["Kota/Kabupaten", "Kota", "Kabupaten/Kota", "City"] if c in customer_orders.columns), None)
+                    province_col = next((c for c in ["Provinsi", "Province"] if c in customer_orders.columns), None)
+                    if city_col:
+                        location_label = "alamat pengiriman" if address_col else "kota/provinsi"
+                        st.caption(f"Lokasi diperkirakan dari {location_label} menggunakan OpenStreetMap.")
+                        if st.button("📍 Cari lokasi customer", key="geocode_customers"):
+                            cache = st.session_state.setdefault("customer_geocode_cache", _load_customer_geocode_cache())
+                            places = customer_orders[[city_col] + ([province_col] if province_col else [])].drop_duplicates().dropna(subset=[city_col])
+                            progress = st.progress(0, text="Mencari lokasi customer...")
+                            for index, (_, place_row) in enumerate(places.iterrows(), start=1):
+                                place = str(place_row[city_col]).strip()
+                                if province_col and pd.notna(place_row[province_col]):
+                                    place = f"{place}, {place_row[province_col]}, Indonesia"
+                                if place not in cache:
+                                    try:
+                                        cache[place] = _geocode_place(place)
+                                    except Exception:
+                                        cache[place] = None
+                                    _save_customer_geocode_cache(cache)
+                                progress.progress(index / len(places), text=f"Memproses {index}/{len(places)} lokasi...")
+                            progress.empty()
+                            st.rerun()
+                        else:
+                            st.markdown(f'<div class="dashboard-meta-card">Tekan tombol untuk mencari koordinat {location_label} customer dan menghitung jarak.</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div class="dashboard-meta-card">Kolom kota customer tidak ditemukan pada file Order.</div>', unsafe_allow_html=True)
+                    cache = st.session_state.setdefault("customer_geocode_cache", _load_customer_geocode_cache())
+                    if city_col and cache:
+                        def cached_distance(place_row):
+                            place = str(place_row[city_col]).strip()
+                            if province_col and pd.notna(place_row[province_col]):
+                                place = f"{place}, {place_row[province_col]}, Indonesia"
+                            coords = cache.get(place)
+                            if not coords:
+                                return pd.NA
+                            lat, lon = map(math.radians, coords)
+                            lat0, lon0 = math.radians(3.5822738478321146), math.radians(98.71762676169524)
+                            a = math.sin((lat - lat0) / 2) ** 2 + math.cos(lat0) * math.cos(lat) * math.sin((lon - lon0) / 2) ** 2
+                            return 6371 * 2 * math.asin(math.sqrt(a))
+                        distance_summary = customer_orders.assign(**{"Distance (km)": customer_orders.apply(cached_distance, axis=1)})
+                        distance_summary = distance_summary.groupby(customer_col, as_index=False)["Distance (km)"].min().rename(columns={customer_col: "Username"})
+                        distance_summary = display_customer[["Username", "Total Orders", "Completed Sales", "Pending Sales", "Total Laba Bersih"]].merge(distance_summary, on="Username", how="left").sort_values("Distance (km)", na_position="last")
+                        distance_summary["Distance Status"] = distance_summary["Distance (km)"].map(lambda value: "Lokasi tidak ditemukan" if pd.isna(value) else "OK")
+                        st.dataframe(distance_summary, use_container_width=True, hide_index=True, column_config={"Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km")})
 
                 st.markdown('<div class="section-title">🔎 Customer Detail</div>', unsafe_allow_html=True)
                 selected_customer = st.selectbox("Pilih customer", customer_summary["Username"].sort_values().tolist())
