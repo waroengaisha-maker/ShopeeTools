@@ -2904,8 +2904,12 @@ elif menu in {"reconciliation", "order"}:
 elif menu == "customers":
     if 'result' not in st.session_state:
         _load_session_result()
-    st.title("👥 Customers")
-    st.write("Ringkasan pelanggan berdasarkan file Order aktif dari Dashboard.")
+    st.markdown(
+        '<div class="dashboard-hero"><div class="dashboard-kicker">Customer Intelligence</div>'
+        '<div class="dashboard-title">👥 Customers</div>'
+        '<div class="dashboard-description">Ringkasan pelanggan dari file Order aktif, dengan metrik keuangan mengikuti scope Rekonsiliasi.</div></div>',
+        unsafe_allow_html=True,
+    )
     customer_file = _find_session_order_file()
     if not customer_file:
         st.info("Belum ada file Order aktif. Unggah dan proses file dari Dashboard terlebih dahulu.")
@@ -2953,8 +2957,44 @@ elif menu == "customers":
                 overview_cols[2].metric("Repeat Customers", int((customer_summary["Completed Orders"] > 1).sum()))
                 overview_cols[3].metric("Repeat Rate", f"{(customer_summary['Completed Orders'].gt(1).mean() * 100 if len(customer_summary) else 0):.1f}%")
 
-                st.subheader("Customer List")
+                st.markdown('<div class="section-title">📋 Customer List</div>', unsafe_allow_html=True)
                 display_customer = customer_summary.copy()
+                list_result = st.session_state.get("result", pd.DataFrame()).copy()
+                if not list_result.empty and "No. Pesanan" in list_result.columns:
+                    order_customer = customer_orders[["No. Pesanan", customer_col]].copy()
+                    order_customer["No. Pesanan"] = order_customer["No. Pesanan"].astype(str)
+                    list_result["No. Pesanan"] = list_result["No. Pesanan"].astype(str)
+                    list_result = list_result.merge(order_customer.drop_duplicates("No. Pesanan"), on="No. Pesanan", how="left")
+                    list_hpp_lookup = _build_hpp_lookup_for_dashboard(list_result)
+                    settled = list_result[list_result["Is_Settled"] == True].copy() if "Is_Settled" in list_result.columns else pd.DataFrame()
+                    hist_subtotal = pd.to_numeric(settled.get("Subtotal", 0), errors="coerce").fillna(0).sum()
+                    hist_fee = abs(pd.to_numeric(settled.get("Total Biaya", 0), errors="coerce").fillna(0).sum())
+                    hist_process = abs(pd.to_numeric(settled.get("Biaya Proses Pesanan", 0), errors="coerce").fillna(0).sum())
+                    hist_orders = settled["No. Pesanan"].nunique()
+                    process_per_order = hist_process / hist_orders if hist_orders else 0
+                    fee_ratio = max(hist_fee - hist_process, 0) / hist_subtotal if hist_subtotal else 0.15
+                    product_ratios = {}
+                    for product, rows in settled.groupby("Nama Produk") if not settled.empty and "Nama Produk" in settled.columns else []:
+                        subtotal = pd.to_numeric(rows.get("Subtotal", 0), errors="coerce").fillna(0).sum()
+                        fees = abs(pd.to_numeric(rows.get("Total Biaya", 0), errors="coerce").fillna(0).sum())
+                        proc = abs(pd.to_numeric(rows.get("Biaya Proses Pesanan", 0), errors="coerce").fillna(0).sum())
+                        product_ratios[product] = max(fees - proc, 0) / subtotal if subtotal else fee_ratio
+
+                    def list_net_profit(row):
+                        subtotal = pd.to_numeric(row.get("Subtotal", 0), errors="coerce")
+                        subtotal = subtotal if pd.notna(subtotal) else 0
+                        fee = pd.to_numeric(row.get("Total Biaya", 0), errors="coerce")
+                        if not bool(row.get("Is_Settled", True)) and not settled.empty:
+                            fee = -round(subtotal * product_ratios.get(row.get("Nama Produk"), fee_ratio) + process_per_order)
+                        hpp_info = list_hpp_lookup.get(row.get("Nama Produk"), {})
+                        hpp = pd.to_numeric(row.get("Jumlah Bersih", 0), errors="coerce") * hpp_info.get("HargaPokok", 0) / (hpp_info.get("Konversi", 1) or 1)
+                        return subtotal + (fee if pd.notna(fee) else 0) - hpp if hpp_info else pd.NA
+
+                    list_result["Total Laba Bersih"] = list_result.apply(list_net_profit, axis=1)
+                    profit_by_customer = list_result.groupby(customer_col)["Total Laba Bersih"].sum(min_count=1).rename("Total Laba Bersih")
+                    display_customer = display_customer.merge(profit_by_customer, left_on="Username", right_index=True, how="left")
+                else:
+                    display_customer["Total Laba Bersih"] = pd.NA
                 for col in ["First Order", "Last Order"]:
                     display_customer[col] = display_customer[col].dt.strftime("%Y-%m-%d").fillna("-")
                 st.dataframe(
@@ -2965,14 +3005,16 @@ elif menu == "customers":
                         "Completed Spending": st.column_config.NumberColumn("Completed Spending", format="Rp %,d"),
                         "Cancelled Spending": st.column_config.NumberColumn("Cancelled Spending", format="Rp %,d"),
                         "Average Order Value": st.column_config.NumberColumn("Average Order Value", format="Rp %,d"),
+                        "Total Laba Bersih": st.column_config.NumberColumn("Total Laba Bersih", format="Rp %,d"),
                     },
                 )
 
-                st.subheader("Customer Detail")
+                st.markdown('<div class="section-title">🔎 Customer Detail</div>', unsafe_allow_html=True)
                 selected_customer = st.selectbox("Pilih customer", customer_summary["Username"].sort_values().tolist())
                 detail = customer_orders[customer_orders[customer_col] == selected_customer].sort_values("Waktu Pesanan Dibuat", ascending=False)
                 detail_order_ids = detail["No. Pesanan"].astype(str).unique().tolist()
-                detail_result = st.session_state.get("result", pd.DataFrame()).copy()
+                reconciliation_result = st.session_state.get("result", pd.DataFrame()).copy()
+                detail_result = reconciliation_result.copy()
                 detail_result = detail_result[detail_result["No. Pesanan"].astype(str).isin(detail_order_ids)].copy() if not detail_result.empty and "No. Pesanan" in detail_result.columns else pd.DataFrame()
                 reconciliation_order_count = (
                     detail_result["No. Pesanan"].astype(str).nunique()
@@ -2991,6 +3033,36 @@ elif menu == "customers":
                     "Customer Orders berasal dari seluruh file Order aktif."
                 )
                 if not detail_result.empty:
+                    # Untuk order unsettled, gunakan estimasi fee berbasis histori settled
+                    # pada scope rekonsiliasi aktif, sama seperti proyeksi dashboard penjualan.
+                    history_settled = (
+                        reconciliation_result[reconciliation_result["Is_Settled"] == True].copy()
+                        if "Is_Settled" in reconciliation_result.columns else pd.DataFrame()
+                    )
+                    history_subtotal = pd.to_numeric(history_settled.get("Subtotal", 0), errors="coerce").fillna(0).sum()
+                    history_total_fee = abs(pd.to_numeric(history_settled.get("Total Biaya", 0), errors="coerce").fillna(0).sum())
+                    history_process_fee = abs(pd.to_numeric(history_settled.get("Biaya Proses Pesanan", 0), errors="coerce").fillna(0).sum())
+                    history_order_count = history_settled["No. Pesanan"].astype(str).nunique() if "No. Pesanan" in history_settled.columns else 0
+                    process_fee_per_order = history_process_fee / history_order_count if history_order_count else 0
+                    global_fee_ratio = max(history_total_fee - history_process_fee, 0) / history_subtotal if history_subtotal else 0.15
+                    product_fee_ratio = {}
+                    if not history_settled.empty and "Nama Produk" in history_settled.columns:
+                        for product, rows in history_settled.groupby("Nama Produk"):
+                            subtotal = pd.to_numeric(rows.get("Subtotal", 0), errors="coerce").fillna(0).sum()
+                            total_fee = abs(pd.to_numeric(rows.get("Total Biaya", 0), errors="coerce").fillna(0).sum())
+                            process_fee = abs(pd.to_numeric(rows.get("Biaya Proses Pesanan", 0), errors="coerce").fillna(0).sum())
+                            product_fee_ratio[product] = max(total_fee - process_fee, 0) / subtotal if subtotal else global_fee_ratio
+
+                    def customer_total_fee(row):
+                        actual_fee = pd.to_numeric(row.get("Total Biaya", 0), errors="coerce")
+                        if bool(row.get("Is_Settled", True)) or history_settled.empty:
+                            return actual_fee if pd.notna(actual_fee) else 0
+                        subtotal = pd.to_numeric(row.get("Subtotal", 0), errors="coerce")
+                        subtotal = subtotal if pd.notna(subtotal) else 0
+                        non_process = subtotal * product_fee_ratio.get(row.get("Nama Produk"), global_fee_ratio)
+                        return -round(non_process + process_fee_per_order)
+
+                    detail_result["Total Biaya"] = detail_result.apply(customer_total_fee, axis=1).astype(int)
                     detail_hpp_lookup = _build_hpp_lookup_for_dashboard(detail_result)
                     detail_result["Penghasilan"] = detail_result["Subtotal"] + detail_result["Total Biaya"].fillna(0)
                     def detail_hpp(row):
@@ -3001,6 +3073,16 @@ elif menu == "customers":
                     detail_result["Laba Bersih"] = detail_result.apply(
                         lambda row: row["Penghasilan"] - row["HPP"] if row["HPP Status"] == "Confirmed" else pd.NA,
                         axis=1,
+                    )
+                    total_customer_net_profit = pd.to_numeric(
+                        detail_result["Laba Bersih"], errors="coerce"
+                    ).sum(min_count=1)
+                    profit_cols = st.columns(1)
+                    profit_cols[0].metric(
+                        "Total Laba Bersih",
+                        f"Rp {int(total_customer_net_profit):,}"
+                        if pd.notna(total_customer_net_profit) else "Belum tersedia",
+                        help="Total Penghasilan dikurangi HPP untuk order customer dalam scope Rekonsiliasi aktif. Order dengan HPP UNMAPPED tidak dihitung.",
                     )
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
                     detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan", "HPP", "Laba Bersih", "HPP Status", "Is_Settled"]
@@ -3019,7 +3101,7 @@ elif menu == "customers":
                 else:
                     st.info("Detail rekonsiliasi customer belum tersedia.")
 
-                st.subheader("Repeat Customer Analysis")
+                st.markdown('<div class="section-title">🔁 Repeat Customer Analysis</div>', unsafe_allow_html=True)
                 repeat_only = customer_summary[customer_summary["Completed Orders"] > 1]
                 st.caption(f"{len(repeat_only):,} customer melakukan repeat order dari {len(customer_summary):,} customer.")
         except Exception as exc:
