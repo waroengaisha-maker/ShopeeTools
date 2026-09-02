@@ -2902,6 +2902,8 @@ elif menu in {"reconciliation", "order"}:
 # 📦 MENU 3: KELOLA MASTER HPP
 # ==============================================================================
 elif menu == "customers":
+    if 'result' not in st.session_state:
+        _load_session_result()
     st.title("👥 Customers")
     st.write("Ringkasan pelanggan berdasarkan file Order aktif dari Dashboard.")
     customer_file = _find_session_order_file()
@@ -2920,6 +2922,11 @@ elif menu == "customers":
                     customer_orders["Subtotal Pesanan"] = _parse_shopee_rupiah_series(customer_orders["Subtotal Pesanan"])
                 else:
                     customer_orders["Subtotal Pesanan"] = 0
+                customer_orders["Jumlah"] = pd.to_numeric(customer_orders.get("Jumlah", 0), errors="coerce").fillna(0)
+                customer_orders["Returned quantity"] = pd.to_numeric(customer_orders.get("Returned quantity", 0), errors="coerce").fillna(0)
+                customer_orders["Jumlah Bersih"] = customer_orders["Jumlah"] - customer_orders["Returned quantity"]
+                customer_orders["_completed_spending"] = customer_orders["Subtotal Pesanan"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("selesai"), 0)
+                customer_orders["_cancelled_spending"] = customer_orders["Subtotal Pesanan"].where(customer_orders["Status Pesanan"].astype(str).str.casefold().eq("batal"), 0)
                 customer_orders = customer_orders.dropna(subset=["No. Pesanan"])
                 customer_orders = customer_orders.drop_duplicates([customer_col, "No. Pesanan", "Status Pesanan"])
                 customer_summary = customer_orders.groupby(customer_col, as_index=False).agg(
@@ -2927,12 +2934,13 @@ elif menu == "customers":
                         "Total Orders": ("No. Pesanan", "nunique"),
                         "Completed Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("selesai").sum())),
                         "Cancelled Orders": ("Status Pesanan", lambda s: int(s.astype(str).str.casefold().eq("batal").sum())),
-                        "Total Spending": ("Subtotal Pesanan", "sum"),
+                        "Completed Spending": ("_completed_spending", "sum"),
+                        "Cancelled Spending": ("_cancelled_spending", "sum"),
                         "First Order": ("Waktu Pesanan Dibuat", "min"),
                         "Last Order": ("Waktu Pesanan Dibuat", "max"),
                     }
                 ).rename(columns={customer_col: "Username"})
-                customer_summary["Average Order Value"] = customer_summary["Total Spending"] / customer_summary["Total Orders"].replace(0, 1)
+                customer_summary["Average Order Value"] = customer_summary["Completed Spending"] / customer_summary["Completed Orders"].replace(0, 1)
                 def repeat_status(completed_orders):
                     if completed_orders == 0:
                         return "Belum Ada Pesanan Selesai"
@@ -2954,7 +2962,8 @@ elif menu == "customers":
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Total Spending": st.column_config.NumberColumn("Total Spending", format="Rp %,d"),
+                        "Completed Spending": st.column_config.NumberColumn("Completed Spending", format="Rp %,d"),
+                        "Cancelled Spending": st.column_config.NumberColumn("Cancelled Spending", format="Rp %,d"),
                         "Average Order Value": st.column_config.NumberColumn("Average Order Value", format="Rp %,d"),
                     },
                 )
@@ -2962,7 +2971,37 @@ elif menu == "customers":
                 st.subheader("Customer Detail")
                 selected_customer = st.selectbox("Pilih customer", customer_summary["Username"].sort_values().tolist())
                 detail = customer_orders[customer_orders[customer_col] == selected_customer].sort_values("Waktu Pesanan Dibuat", ascending=False)
-                st.dataframe(detail[[c for c in ["No. Pesanan", "Status Pesanan", "Waktu Pesanan Dibuat", "Nama Produk", "Nama Variasi", "Subtotal Pesanan"] if c in detail.columns]], use_container_width=True, hide_index=True)
+                detail_order_ids = detail["No. Pesanan"].astype(str).unique().tolist()
+                detail_result = st.session_state.get("result", pd.DataFrame()).copy()
+                detail_result = detail_result[detail_result["No. Pesanan"].astype(str).isin(detail_order_ids)].copy() if not detail_result.empty and "No. Pesanan" in detail_result.columns else pd.DataFrame()
+                if not detail_result.empty:
+                    detail_hpp_lookup = _build_hpp_lookup_for_dashboard(detail_result)
+                    detail_result["Penghasilan"] = detail_result["Subtotal"] + detail_result["Total Biaya"].fillna(0)
+                    def detail_hpp(row):
+                        info = detail_hpp_lookup.get(row["Nama Produk"], {})
+                        return row["Jumlah Bersih"] * info.get("HargaPokok", 0) / (info.get("Konversi", 1) or 1)
+                    detail_result["HPP"] = detail_result.apply(detail_hpp, axis=1)
+                    detail_result["HPP Status"] = detail_result["Nama Produk"].astype(str).isin(detail_hpp_lookup).map({True: "Confirmed", False: "UNMAPPED"})
+                    detail_result["Laba Bersih"] = detail_result.apply(
+                        lambda row: row["Penghasilan"] - row["HPP"] if row["HPP Status"] == "Confirmed" else pd.NA,
+                        axis=1,
+                    )
+                    detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
+                    detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan", "HPP", "Laba Bersih", "HPP Status", "Is_Settled"]
+                    st.dataframe(
+                        detail_result[[c for c in detail_columns if c in detail_result.columns]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Omzet Kotor": st.column_config.NumberColumn("Omzet Kotor", format="Rp %,d"),
+                            "Total Biaya": st.column_config.NumberColumn("Total Biaya", format="Rp %,d"),
+                            "Penghasilan": st.column_config.NumberColumn("Penghasilan", format="Rp %,d"),
+                            "HPP": st.column_config.NumberColumn("HPP", format="Rp %,d"),
+                            "Laba Bersih": st.column_config.NumberColumn("Laba Bersih", format="Rp %,d"),
+                        },
+                    )
+                else:
+                    st.info("Detail rekonsiliasi customer belum tersedia.")
 
                 st.subheader("Repeat Customer Analysis")
                 repeat_only = customer_summary[customer_summary["Completed Orders"] > 1]
