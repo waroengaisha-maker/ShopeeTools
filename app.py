@@ -3244,6 +3244,7 @@ elif menu == "customers":
                         (profit_cols[2], "Projected Customer Net Profit", projected_profit, "Actual Net Profit + Estimated Pending Profit."),
                     ]:
                         column.metric(label, f"Rp {int(value):,}" if pd.notna(value) else "Belum tersedia", help=help_text)
+                    detail_result = detail_result.drop(columns=["_has_confirmed_hpp"], errors="ignore")
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
                     detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan Aktual", "Estimasi Penghasilan", "HPP", "Laba Bersih", "Status Profit", "HPP Status", "Is_Settled"]
                     st.dataframe(
