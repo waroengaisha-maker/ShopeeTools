@@ -3218,16 +3218,16 @@ elif menu == "customers":
                         info = detail_hpp_lookup.get(row["Nama Produk"], {})
                         return row["Jumlah Bersih"] * info.get("HargaPokok", 0) / (info.get("Konversi", 1) or 1)
                     detail_result["HPP"] = detail_result.apply(detail_hpp, axis=1)
-                    detail_result["_has_confirmed_hpp"] = detail_result["Nama Produk"].astype(str).isin(detail_hpp_lookup)
-                    detail_result["HPP Status"] = detail_result["_has_confirmed_hpp"].map({True: "Confirmed", False: "UNMAPPED"})
+                    has_confirmed_hpp = detail_result["Nama Produk"].astype(str).isin(detail_hpp_lookup)
+                    detail_result["HPP Status"] = has_confirmed_hpp.map({True: "Confirmed", False: "UNMAPPED"})
                     detail_result["Laba Bersih"] = detail_result.apply(
-                        lambda row: row["Penghasilan"] - row["HPP"] if row["_has_confirmed_hpp"] else pd.NA,
+                        lambda row: row["Penghasilan"] - row["HPP"] if has_confirmed_hpp.loc[row.name] else pd.NA,
                         axis=1,
                     )
                     detail_result["Status Profit"] = detail_result.apply(
                         lambda row: (
                             "Tidak tersedia (HPP Unmapped)"
-                            if not row["_has_confirmed_hpp"]
+                            if not has_confirmed_hpp.loc[row.name]
                             else "Aktual" if _as_bool(row.get("Is_Settled", False))
                             else "Estimasi / Belum Final"
                         ),
@@ -3244,7 +3244,6 @@ elif menu == "customers":
                         (profit_cols[2], "Projected Customer Net Profit", projected_profit, "Actual Net Profit + Estimated Pending Profit."),
                     ]:
                         column.metric(label, f"Rp {int(value):,}" if pd.notna(value) else "Belum tersedia", help=help_text)
-                    detail_result = detail_result.drop(columns=["_has_confirmed_hpp"], errors="ignore")
                     detail_result = detail_result.rename(columns={"Subtotal": "Omzet Kotor", "Jumlah Bersih": "Qty Bersih"})
                     detail_columns = ["No. Pesanan", "Nama Produk", "Qty Bersih", "Omzet Kotor", "Total Biaya", "Penghasilan Aktual", "Estimasi Penghasilan", "HPP", "Laba Bersih", "Status Profit", "HPP Status", "Is_Settled"]
                     st.dataframe(
